@@ -29,10 +29,10 @@ Key packages:
   `runner: mock` in `fscicd.yml`. The `container` runner's command construction is
   unit-tested, but real `docker run` execution only happens on a CI runner with
   Docker + the NI headless image. Do not treat "cannot run LabVIEW here" as a bug.
-- **No-license LabVIEW is 2026 Q1+ only.** Headless mode (`-Headless` /
-  `LV_RTE_HEADLESS=1`) skips activation for CI on **LabVIEW 2026 Q1 and later**.
-  LabVIEW 2023 has no headless mode and needs NILM activation against the volume
-  license server (Windows container). Keep new work on the 2026 64-bit path.
+- **Everything is LabVIEW 2026 64-bit.** There is no support for older versions
+  or 32-bit — do not add version/bitness branching. Headless mode (`-Headless` /
+  `LV_RTE_HEADLESS=1`) skips license activation for CI, so no license server needs
+  to be reachable from the runner.
 - **Mock results are deterministic by file path** (seeded from the VI path): a VI
   whose name contains `broken` is reported broken, `missing` yields a missing
   dependency, and VI Analyzer findings are stable per path. Sample fixtures under

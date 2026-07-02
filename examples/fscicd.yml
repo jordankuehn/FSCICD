@@ -14,8 +14,8 @@ project:
     repo_slug: signal-generator
 
 labview:
+  # FSCICD assumes LabVIEW 2026 64-bit everywhere; no older-version handling.
   version: "2026"
-  bitness: 64
   # "mock" runs the deterministic simulator (no LabVIEW needed) — used for local
   # development and CI of FSCICD itself. Switch to "container" on a runner that
   # has Docker + the NI headless image.

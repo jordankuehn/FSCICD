@@ -28,8 +28,9 @@ class BitbucketConfig:
 
 @dataclass
 class LabVIEWConfig:
+    # FSCICD targets LabVIEW 2026 64-bit exclusively; there is no support for
+    # older versions or 32-bit, so these are fixed rather than configurable.
     version: str = "2026"
-    bitness: int = 64
     runner: str = "mock"  # "mock" | "container"
     image: str = "nationalinstruments/labview:2026q1-linux"
     headless: bool = True
@@ -37,9 +38,6 @@ class LabVIEWConfig:
     def __post_init__(self) -> None:
         if self.runner not in ("mock", "container"):
             raise ConfigError(f"labview.runner must be 'mock' or 'container', got {self.runner!r}")
-        if int(self.bitness) not in (32, 64):
-            raise ConfigError(f"labview.bitness must be 32 or 64, got {self.bitness!r}")
-        self.bitness = int(self.bitness)
 
 
 @dataclass
@@ -110,7 +108,6 @@ def parse_config(raw: dict) -> Config:
     lv = _as_dict(raw.get("labview"), "labview")
     labview = LabVIEWConfig(
         version=str(lv.get("version", "2026")),
-        bitness=lv.get("bitness", 64),
         runner=lv.get("runner", "mock"),
         image=lv.get("image", "nationalinstruments/labview:2026q1-linux"),
         headless=bool(lv.get("headless", True)),

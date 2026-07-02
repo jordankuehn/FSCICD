@@ -9,14 +9,13 @@ It is built around **Option B**: your code of record lives in **Bitbucket**, and
 repositories are mirrored into **GitHub** so the containerized LabVIEW CI runs on
 GitHub Actions.
 
-## Why containers (and no license server for 2026)
+## Why containers (and no license server)
 
-NI's official images (`nationalinstruments/labview:*`) support a **headless mode**
-starting **LabVIEW 2026 Q1**. In headless mode, `LabVIEWCLI` operations
-(Mass Compile, VI Analyzer, etc.) run **without license activation** for CI/CD —
-invoke with `-Headless` or set `LV_RTE_HEADLESS=1`. FSCICD targets 2026 64-bit
-for this reason. (LabVIEW 2023 has no headless mode and would require NILM
-activation against your volume license server inside a Windows container.)
+FSCICD assumes **LabVIEW 2026 64-bit everywhere**. NI's official images
+(`nationalinstruments/labview:*`) support a **headless mode** in which
+`LabVIEWCLI` operations (Mass Compile, VI Analyzer, etc.) run **without license
+activation** for CI/CD — invoke with `-Headless` or set `LV_RTE_HEADLESS=1`. This
+means no license server needs to be reachable from the runner.
 
 ## Architecture
 

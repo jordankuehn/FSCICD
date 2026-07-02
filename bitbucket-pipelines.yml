@@ -1,0 +1,18 @@
+# Bitbucket Pipelines: mirror this repository into GitHub so the GitHub Actions
+# LabVIEW CI engine (.github/workflows/labview-ci.yml) runs on every push.
+#
+# Option B (mirror) keeps the containerized LabVIEW CI on GitHub while your code
+# of record stays on Bitbucket. Configure a repository variable GITHUB_MIRROR_URL
+# with an authenticated push URL, e.g.
+#   https://x-access-token:<TOKEN>@github.com/<owner>/<repo>.git
+image: atlassian/default-image:4
+
+pipelines:
+  branches:
+    "**":
+      - step:
+          name: Mirror to GitHub
+          clone:
+            depth: full
+          script:
+            - git push --mirror "${GITHUB_MIRROR_URL}"

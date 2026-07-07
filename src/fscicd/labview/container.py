@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from fscicd.labview.base import LabVIEWRunner
@@ -23,6 +24,8 @@ from fscicd.models import (
     AnalyzerFinding,
     MassCompileResult,
     Status,
+    TestCaseResult,
+    UnitTestResult,
     ViAnalyzerResult,
     ViCompileResult,
 )
@@ -89,6 +92,29 @@ class ContainerRunner(LabVIEWRunner):
             cmd.append("-Headless")
         return cmd
 
+    def build_unittest_command(self, out_dir: Path, framework: str) -> list[str]:
+        """Return the full ``docker run ... LabVIEWCLI`` argv for unit tests.
+
+        Uses the RunUnitTests operation, which drives the configured framework
+        (Caraya / VI Tester / NI UTF) headlessly and emits a JUnit XML report.
+        """
+
+        cmd = self._base_docker_args(out_dir)
+        cmd += [
+            "LabVIEWCLI",
+            "-OperationName",
+            "RunUnitTests",
+            "-TestFramework",
+            framework,
+            "-ProjectPath",
+            CONTAINER_WORKDIR,
+            "-JUnitReportPath",
+            f"{CONTAINER_OUTDIR}/unit_tests.xml",
+        ]
+        if self.config.headless:
+            cmd.append("-Headless")
+        return cmd
+
     def _run(self, argv: list[str]) -> None:
         if shutil.which("docker") is None:
             raise ContainerRunnerError(
@@ -112,6 +138,13 @@ class ContainerRunner(LabVIEWRunner):
         out_dir.mkdir(parents=True, exist_ok=True)
         self._run(self.build_vianalyzer_command(out_dir, config_path))
         return parse_vianalyzer_report(out_dir / "vi_analyzer.json")
+
+    def unit_tests(self, test_globs: list[str], frameworks: list[str]) -> UnitTestResult:
+        out_dir = self.repo_path / "build" / "labview-out"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        framework = frameworks[0] if frameworks else "caraya"
+        self._run(self.build_unittest_command(out_dir, framework))
+        return parse_junit_report(out_dir / "unit_tests.xml", framework)
 
 
 def parse_masscompile_report(path: Path) -> MassCompileResult:
@@ -157,3 +190,48 @@ def parse_vianalyzer_report(path: Path) -> ViAnalyzerResult:
     tested = data.get("tested_vis", len({f.vi_path for f in findings}))
     status = Status.FAILED if high else Status.PASSED
     return ViAnalyzerResult(status=status, tested_vis=tested, findings=findings)
+
+
+def parse_junit_report(path: Path, framework: str) -> UnitTestResult:
+    """Parse a JUnit XML report (as emitted by the worker) into a result."""
+
+    root = ET.fromstring(Path(path).read_text())  # noqa: S314 - trusted CI output
+    suites = [root] if root.tag == "testsuite" else root.findall(".//testsuite")
+    cases: list[TestCaseResult] = []
+    for suite in suites:
+        for tc in suite.findall("testcase"):
+            failure = tc.find("failure")
+            error = tc.find("error")
+            skipped = tc.find("skipped")
+            if error is not None:
+                status, message = "error", error.get("message", "")
+            elif failure is not None:
+                status, message = "failed", failure.get("message", "")
+            elif skipped is not None:
+                status, message = "skipped", skipped.get("message", "")
+            else:
+                status, message = "passed", ""
+            cases.append(
+                TestCaseResult(
+                    name=tc.get("name", ""),
+                    classname=tc.get("classname", ""),
+                    status=status,
+                    duration=float(tc.get("time", 0) or 0),
+                    message=message,
+                )
+            )
+    passed = sum(1 for c in cases if c.status == "passed")
+    failed = sum(1 for c in cases if c.status == "failed")
+    errors = sum(1 for c in cases if c.status == "error")
+    skipped = sum(1 for c in cases if c.status == "skipped")
+    status = Status.FAILED if (failed or errors) else Status.PASSED
+    return UnitTestResult(
+        status=status,
+        framework=framework,
+        total=len(cases),
+        passed=passed,
+        failed=failed,
+        errors=errors,
+        skipped=skipped,
+        cases=cases,
+    )

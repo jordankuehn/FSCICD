@@ -32,6 +32,11 @@ capabilities:
     enabled: true
     config_path: ""          # path to a .viancfg; empty uses the worker default
     fail_on_severity: high   # high | medium | low | none
+  unit_tests:
+    enabled: true
+    frameworks: ["caraya"]   # caraya | vi_tester | ni_utf (merged in the report)
+    test_globs: ["**/*Test*.vi", "**/Tests/**/*.vi"]
+    fail_on_failures: true
 
 report:
   output_dir: build/reports

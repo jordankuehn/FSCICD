@@ -19,6 +19,8 @@ from fscicd.models import (
     AnalyzerFinding,
     MassCompileResult,
     Status,
+    TestCaseResult,
+    UnitTestResult,
     ViAnalyzerResult,
     ViCompileResult,
 )
@@ -93,3 +95,58 @@ class MockRunner(LabVIEWRunner):
         high = sum(1 for f in findings if f.severity == "high")
         status = Status.FAILED if high else (Status.PASSED if vis else Status.SKIPPED)
         return ViAnalyzerResult(status=status, tested_vis=len(vis), findings=findings)
+
+    def unit_tests(self, test_globs: list[str], frameworks: list[str]) -> UnitTestResult:
+        test_vis = self.discover(test_globs)
+        framework = frameworks[0] if frameworks else "caraya"
+        cases: list[TestCaseResult] = []
+        for rel in test_vis:
+            name = rel.name.lower()
+            seed = _seed(str(rel))
+            case_count = 1 + (seed % 3)
+            for i in range(case_count):
+                classname = str(rel.with_suffix(""))
+                case_name = f"test_{(seed >> (i + 1)) % 100:02d}"
+                if "fail" in name or "broken" in name:
+                    cases.append(
+                        TestCaseResult(
+                            name=case_name,
+                            classname=classname,
+                            status="failed",
+                            duration=round(0.01 * ((seed >> i) % 20), 3),
+                            message="Assertion failed: expected value did not match.",
+                        )
+                    )
+                else:
+                    cases.append(
+                        TestCaseResult(
+                            name=case_name,
+                            classname=classname,
+                            status="passed",
+                            duration=round(0.01 * ((seed >> i) % 20), 3),
+                        )
+                    )
+        return _summarize_cases(framework, cases, bool(test_vis))
+
+
+def _summarize_cases(framework: str, cases: list[TestCaseResult], ran: bool) -> UnitTestResult:
+    passed = sum(1 for c in cases if c.status == "passed")
+    failed = sum(1 for c in cases if c.status == "failed")
+    errors = sum(1 for c in cases if c.status == "error")
+    skipped = sum(1 for c in cases if c.status == "skipped")
+    if not ran:
+        status = Status.SKIPPED
+    elif failed or errors:
+        status = Status.FAILED
+    else:
+        status = Status.PASSED
+    return UnitTestResult(
+        status=status,
+        framework=framework,
+        total=len(cases),
+        passed=passed,
+        failed=failed,
+        errors=errors,
+        skipped=skipped,
+        cases=cases,
+    )

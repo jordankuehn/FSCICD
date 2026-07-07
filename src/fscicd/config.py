@@ -55,9 +55,21 @@ class ViAnalyzerConfig:
 
 
 @dataclass
+class UnitTestsConfig:
+    enabled: bool = True
+    # Which LabVIEW unit-test frameworks to run and merge (Caraya, VI Tester,
+    # NI Unit Test Framework). The mock runner reports them under one framework
+    # label; the container runner merges each framework's JUnit output.
+    frameworks: list[str] = field(default_factory=lambda: ["caraya"])
+    test_globs: list[str] = field(default_factory=lambda: ["**/*Test*.vi", "**/Tests/**/*.vi"])
+    fail_on_failures: bool = True
+
+
+@dataclass
 class CapabilitiesConfig:
     mass_compile: MassCompileConfig = field(default_factory=MassCompileConfig)
     vi_analyzer: ViAnalyzerConfig = field(default_factory=ViAnalyzerConfig)
+    unit_tests: UnitTestsConfig = field(default_factory=UnitTestsConfig)
 
 
 @dataclass
@@ -116,6 +128,7 @@ def parse_config(raw: dict) -> Config:
     caps = _as_dict(raw.get("capabilities"), "capabilities")
     mc = _as_dict(caps.get("mass_compile"), "capabilities.mass_compile")
     via = _as_dict(caps.get("vi_analyzer"), "capabilities.vi_analyzer")
+    ut = _as_dict(caps.get("unit_tests"), "capabilities.unit_tests")
     capabilities = CapabilitiesConfig(
         mass_compile=MassCompileConfig(
             enabled=bool(mc.get("enabled", True)),
@@ -126,6 +139,12 @@ def parse_config(raw: dict) -> Config:
             enabled=bool(via.get("enabled", True)),
             config_path=via.get("config_path", ""),
             fail_on_severity=via.get("fail_on_severity", "high"),
+        ),
+        unit_tests=UnitTestsConfig(
+            enabled=bool(ut.get("enabled", True)),
+            frameworks=list(ut.get("frameworks", ["caraya"])),
+            test_globs=list(ut.get("test_globs", ["**/*Test*.vi", "**/Tests/**/*.vi"])),
+            fail_on_failures=bool(ut.get("fail_on_failures", True)),
         ),
     )
 

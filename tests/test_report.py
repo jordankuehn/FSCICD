@@ -34,6 +34,28 @@ def _sample_result() -> PipelineResult:
                     ],
                 },
             ),
+            CapabilityResult(
+                "Unit Tests",
+                Status.PASSED,
+                "2 of 2 tests passed (caraya).",
+                {
+                    "framework": "caraya",
+                    "total": 2,
+                    "passed": 2,
+                    "failed": 0,
+                    "errors": 0,
+                    "skipped": 0,
+                    "cases": [
+                        {
+                            "name": "test_01",
+                            "classname": "Tests/Test Alpha",
+                            "status": "passed",
+                            "duration": 0.1,
+                            "message": "",
+                        }
+                    ],
+                },
+            ),
         ],
     )
 
@@ -44,6 +66,8 @@ def test_render_html_contains_key_content():
     assert "deadbeef" in html
     assert "Error Cluster Wired" in html
     assert "FAILED" in html
+    assert "Unit Tests" in html
+    assert "caraya" in html
 
 
 def test_render_json_roundtrips():

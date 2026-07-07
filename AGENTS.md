@@ -35,9 +35,15 @@ Key packages:
   to be reachable from the runner.
 - **Mock results are deterministic by file path** (seeded from the VI path): a VI
   whose name contains `broken` is reported broken, `missing` yields a missing
-  dependency, and VI Analyzer findings are stable per path. Sample fixtures under
+  dependency, VI Analyzer findings are stable per path, and a unit-test VI whose
+  name contains `fail` (or `broken`) produces failing cases. Sample fixtures under
   `examples/sample-labview-project/` are named so the pipeline passes; the
   `examples/broken-project/` fixture is intentionally failing.
+- **Capabilities live in `src/fscicd/capabilities/`** and are wired in
+  `pipeline.py`. Adding one = new capability module + runner method (mock +
+  container) + a report section in `templates/report.html.j2` + config in
+  `config.py`. Unit tests are discovered via `test_globs` (default matches
+  `*Test*.vi` and files under a `Tests/` folder).
 - **Bitbucket credentials come from env vars only** (`BITBUCKET_USERNAME` +
   `BITBUCKET_APP_PASSWORD`, or `BITBUCKET_ACCESS_TOKEN`). With none set, status
   posting runs in dry-run mode, so the pipeline is fully runnable offline.

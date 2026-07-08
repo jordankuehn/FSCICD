@@ -1,0 +1,42 @@
+# FSCICD pipeline configuration.
+#
+# This single file drives the pipeline: which LabVIEW backend runs, which
+# capabilities are enabled, and where results are reported. Copy it to your
+# repository root as `fscicd.yml`.
+
+project:
+  name: Signal Generator
+  # Bitbucket Cloud coordinates used to report commit build statuses.
+  # Credentials come from the environment, never from this file:
+  #   BITBUCKET_USERNAME + BITBUCKET_APP_PASSWORD, or BITBUCKET_ACCESS_TOKEN
+  bitbucket:
+    workspace: my-workspace
+    repo_slug: signal-generator
+
+labview:
+  # FSCICD assumes LabVIEW 2026 64-bit everywhere; no older-version handling.
+  version: "2026"
+  # "mock" runs the deterministic simulator (no LabVIEW needed) — used for local
+  # development and CI of FSCICD itself. Switch to "container" on a runner that
+  # has Docker + the NI headless image.
+  runner: mock
+  image: nationalinstruments/labview:2026q1-linux
+  headless: true
+
+capabilities:
+  mass_compile:
+    enabled: true
+    project_globs: ["**/*.lvproj"]
+    vi_globs: ["**/*.vi", "**/*.ctl"]
+  vi_analyzer:
+    enabled: true
+    config_path: ""          # path to a .viancfg; empty uses the worker default
+    fail_on_severity: high   # high | medium | low | none
+  unit_tests:
+    enabled: true
+    frameworks: ["caraya"]   # caraya | vi_tester | ni_utf (merged in the report)
+    test_globs: ["**/*Test*.vi", "**/Tests/**/*.vi"]
+    fail_on_failures: true
+
+report:
+  output_dir: build/reports

@@ -15,7 +15,7 @@ import abc
 from pathlib import Path
 
 from fscicd.config import LabVIEWConfig
-from fscicd.models import MassCompileResult, ViAnalyzerResult
+from fscicd.models import MassCompileResult, UnitTestResult, ViAnalyzerResult
 
 
 class LabVIEWRunner(abc.ABC):
@@ -32,6 +32,10 @@ class LabVIEWRunner(abc.ABC):
     @abc.abstractmethod
     def vi_analyzer(self, config_path: str) -> ViAnalyzerResult:
         """Run NI VI Analyzer static analysis and return findings."""
+
+    @abc.abstractmethod
+    def unit_tests(self, test_globs: list[str], frameworks: list[str]) -> UnitTestResult:
+        """Run LabVIEW unit tests and return merged case results."""
 
     def discover(self, globs: list[str]) -> list[Path]:
         """Return repo-relative paths matching any of the given globs."""

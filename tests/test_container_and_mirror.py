@@ -5,6 +5,7 @@ import json
 from fscicd.config import LabVIEWConfig
 from fscicd.labview.container import (
     ContainerRunner,
+    parse_junit_report,
     parse_masscompile_report,
     parse_vianalyzer_report,
 )
@@ -28,6 +29,36 @@ def test_vianalyzer_command_uses_config_path(tmp_path):
     assert "RunVIAnalyzer" in cmd
     assert "/work/my.viancfg" in cmd
     assert "-Headless" in cmd
+
+
+def test_unittest_command_is_headless(tmp_path):
+    runner = ContainerRunner(LabVIEWConfig(runner="container"), tmp_path)
+    cmd = runner.build_unittest_command(tmp_path / "out", "caraya")
+    assert "RunUnitTests" in cmd
+    assert "caraya" in cmd
+    assert "-Headless" in cmd
+    assert any("unit_tests.xml" in part for part in cmd)
+
+
+def test_parse_junit_report(tmp_path):
+    report = tmp_path / "unit_tests.xml"
+    report.write_text(
+        """<testsuites>
+          <testsuite name="Caraya">
+            <testcase classname="Tests/A" name="test_ok" time="0.1"/>
+            <testcase classname="Tests/A" name="test_bad" time="0.2">
+              <failure message="boom">assert</failure>
+            </testcase>
+            <testcase classname="Tests/A" name="test_skip"><skipped/></testcase>
+          </testsuite>
+        </testsuites>"""
+    )
+    result = parse_junit_report(report, "caraya")
+    assert result.status is Status.FAILED
+    assert result.total == 3
+    assert result.passed == 1
+    assert result.failed == 1
+    assert result.skipped == 1
 
 
 def test_parse_masscompile_report(tmp_path):

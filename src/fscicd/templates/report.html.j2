@@ -76,6 +76,23 @@
       {% endfor %}
     </table>
     {% endif %}
+    {% if cap.name == "Unit Tests" and cap.details.cases %}
+    <div class="sub">Framework: <code>{{ cap.details.framework }}</code> ·
+      passed {{ cap.details.passed }} · failed {{ cap.details.failed }} ·
+      errors {{ cap.details.errors }} · skipped {{ cap.details.skipped }}</div>
+    <table>
+      <tr><th>Test VI</th><th>Case</th><th>Status</th><th>Time (s)</th><th>Message</th></tr>
+      {% for c in cap.details.cases %}
+      <tr>
+        <td><code>{{ c.classname }}</code></td>
+        <td>{{ c.name }}</td>
+        <td class="{{ 'sev-high' if c.status in ('failed', 'error') else '' }}">{{ c.status }}</td>
+        <td>{{ c.duration }}</td>
+        <td>{{ c.message }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% endif %}
   </div>
   {% endfor %}
 </main>

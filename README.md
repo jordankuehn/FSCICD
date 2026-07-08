@@ -1,9 +1,9 @@
 # FSCICD — Full-Stack CI/CD for LabVIEW
 
-FSCICD runs real CI/CD quality gates for LabVIEW code: **Mass Compile** and
-**VI Analyzer** (with more capabilities to follow), executed inside NI's official
-**headless LabVIEW containers**, with results rendered as a shareable report and
-reported back to **Bitbucket** as commit build statuses.
+FSCICD runs real CI/CD quality gates for LabVIEW code: **Mass Compile**,
+**VI Analyzer**, and **Unit Tests** (Caraya / VI Tester / NI UTF), executed inside
+NI's official **headless LabVIEW containers**, with results rendered as a
+shareable report and reported back to **Bitbucket** as commit build statuses.
 
 It is built around **Option B**: your code of record lives in **Bitbucket**, and
 repositories are mirrored into **GitHub** so the containerized LabVIEW CI runs on
@@ -101,6 +101,6 @@ LabVIEW backend, enabled capabilities, and reporting.
 
 ## Status
 
-MVP: **Mass Compile + VI Analyzer**. Roadmap: VIDiff, VI Browser, Unit Tests,
-Antidoc, aggregated dashboard (mirroring the capabilities of the reference
+Implemented: **Mass Compile**, **VI Analyzer**, **Unit Tests**. Roadmap: VIDiff,
+VI Browser, Antidoc, aggregated multi-commit dashboard (mirroring the reference
 project this is based on).

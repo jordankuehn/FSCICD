@@ -12,6 +12,8 @@ def test_parse_minimal_config():
     assert cfg.labview.version == "2026"
     assert cfg.capabilities.mass_compile.enabled is True
     assert cfg.capabilities.vi_analyzer.enabled is True
+    assert cfg.capabilities.unit_tests.enabled is True
+    assert cfg.capabilities.unit_tests.frameworks == ["caraya"]
 
 
 def test_project_name_required():
@@ -22,6 +24,23 @@ def test_project_name_required():
 def test_invalid_runner_rejected():
     with pytest.raises(ConfigError):
         parse_config({"project": {"name": "X"}, "labview": {"runner": "gpu"}})
+
+
+def test_unit_tests_config_parsed():
+    cfg = parse_config(
+        {
+            "project": {"name": "X"},
+            "capabilities": {
+                "unit_tests": {
+                    "enabled": True,
+                    "frameworks": ["vi_tester", "ni_utf"],
+                    "fail_on_failures": False,
+                }
+            },
+        }
+    )
+    assert cfg.capabilities.unit_tests.frameworks == ["vi_tester", "ni_utf"]
+    assert cfg.capabilities.unit_tests.fail_on_failures is False
 
 
 def test_bitbucket_configured_flag():

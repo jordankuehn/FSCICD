@@ -1,18 +1,62 @@
-# Bitbucket Pipelines: mirror this repository into GitHub so the GitHub Actions
-# LabVIEW CI engine (.github/workflows/labview-ci.yml) runs on every push.
+---
+# FSCICD runs its own CI on Bitbucket Pipelines.
 #
-# Option B (mirror) keeps the containerized LabVIEW CI on GitHub while your code
-# of record stays on Bitbucket. Configure a repository variable GITHUB_MIRROR_URL
-# with an authenticated push URL, e.g.
-#   https://x-access-token:<TOKEN>@github.com/<owner>/<repo>.git
-image: atlassian/default-image:4
+# Two kinds of step, because only one of them needs LabVIEW:
+#
+#   * "Self-test" runs on Atlassian's cloud Linux runners and exercises the
+#     orchestrator with the mock LabVIEW backend - no LabVIEW, no Docker.
+#   * "LabVIEW CI" runs on a self-hosted Windows runner and drives the real NI
+#     headless LabVIEW container. Atlassian does not host Windows runners, so
+#     this step only runs where such a runner is registered and online.
+#
+# Windows runner prerequisites (see README):
+#   * Docker Desktop switched to Windows containers
+#   * nationalinstruments/labview:<tag>-windows pulled
+#   * Python 3.10+ on PATH
+image: python:3.12
+
+definitions:
+  steps:
+    - step: &labview-windows
+        name: LabVIEW CI (Windows container)
+        runs-on:
+          - self.hosted
+          - windows
+          - labview
+        script:
+          # Windows runners execute steps in PowerShell on the host, so the
+          # virtualenv keeps FSCICD's dependencies out of the host Python.
+          - python -m venv .venv
+          - .venv\Scripts\python -m pip install --upgrade pip
+          - .venv\Scripts\python -m pip install "."
+          - >
+            .venv\Scripts\fscicd run
+            --config examples/fscicd.windows.yml
+            --repo-path examples/sample-labview-project
+            --commit $env:BITBUCKET_COMMIT
+        artifacts:
+          - build/reports/**
 
 pipelines:
-  branches:
-    "**":
-      - step:
-          name: Mirror to GitHub
-          clone:
-            depth: full
-          script:
-            - git push --mirror "${GITHUB_MIRROR_URL}"
+  default:
+    - step:
+        name: Self-test (lint, unit tests, mock pipeline)
+        script:
+          - python -m pip install --upgrade pip
+          - pip install -e ".[dev]"
+          - ruff check .
+          - ruff format --check .
+          - yamllint .github/workflows bitbucket-pipelines.yml examples
+          - pytest
+          - >
+            fscicd run --config examples/fscicd.yml
+            --repo-path examples/sample-labview-project
+            --commit "$BITBUCKET_COMMIT"
+        artifacts:
+          - build/reports/**
+    - step: *labview-windows
+
+  custom:
+    # Run the Windows LabVIEW step on demand, without the cloud self-test.
+    labview-windows:
+      - step: *labview-windows

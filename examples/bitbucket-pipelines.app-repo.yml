@@ -1,0 +1,41 @@
+---
+# Copy this into a LabVIEW application repository (as bitbucket-pipelines.yml)
+# to run FSCICD against it on a self-hosted Bitbucket Windows runner.
+#
+# This replaces the old "mirror to GitHub" pipeline: CI runs on Bitbucket, so no
+# GitHub mirror or GitHub Actions workflow is involved.
+#
+# One-time setup:
+#   1. Register a Bitbucket Windows runner (Repository settings > Runners) and
+#      note its labels. This file expects: self.hosted, windows, labview.
+#   2. On the runner host: Docker Desktop in Windows-container mode, plus
+#      `docker pull nationalinstruments/labview:2026q1-windows`.
+#   3. On the runner host: Python 3.10+ on PATH.
+#   4. Commit an `fscicd.yml` to this repo (see examples/fscicd.windows.yml).
+#   5. Optional, for commit build statuses: add BITBUCKET_USERNAME and
+#      BITBUCKET_APP_PASSWORD as secured repository variables. Without them
+#      status posting runs in dry-run mode and the pipeline still passes.
+
+pipelines:
+  default:
+    - step:
+        name: LabVIEW CI (Windows container)
+        runs-on:
+          - self.hosted
+          - windows
+          - labview
+        script:
+          - python -m venv .venv
+          - .venv\Scripts\python -m pip install --upgrade pip
+          # Install the FSCICD orchestrator from its Bitbucket repository.
+          # Pin to a tag or commit once the tooling stabilises.
+          - >
+            .venv\Scripts\python -m pip install
+            "git+https://bitbucket.org/my-workspace/fscicd.git@main"
+          - >
+            .venv\Scripts\fscicd run
+            --config fscicd.yml
+            --repo-path .
+            --commit $env:BITBUCKET_COMMIT
+        artifacts:
+          - build/reports/**

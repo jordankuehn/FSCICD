@@ -1,0 +1,169 @@
+"""End-to-end check of the container runner without Docker or LabVIEW.
+
+The NI container is stood in for by a fake ``subprocess.run`` that writes the
+same plain-text log ``LabVIEWCLI -OperationName MassCompile`` produces and exits
+with the same code, so the whole chain -- command construction, exit-code
+handling, log parsing, capability result, report rendering -- is exercised as it
+would be on a self-hosted Windows runner.
+"""
+
+from __future__ import annotations
+
+import subprocess
+from pathlib import Path
+
+import pytest
+
+from fscicd.capabilities.mass_compile import run_mass_compile
+from fscicd.config import Config, LabVIEWConfig, MassCompileConfig
+from fscicd.labview import container as container_module
+from fscicd.labview.container import ContainerRunner, ContainerRunnerError
+from fscicd.models import Status
+from fscicd.pipeline import run_pipeline
+
+WINDOWS_IMAGE = "nationalinstruments/labview:2026q1-windows"
+
+# A Windows MassCompile log: one VI LabVIEW could not load, and one unresolved
+# subVI attributed to its caller.
+CONTAINER_LOG = (
+    "LabVIEWCLI started logging in file: "
+    "C:\\Users\\ContainerAdministrator\\AppData\\Local\\Temp\\lv.log\r\n"
+    "Operation: MassCompile\r\n"
+    "Compiling directory C:\\work\r\n"
+    '### Bad VI: "Broken Acquisition.vi"\r\n'
+    'Path="C:\\work\\Signal Generator\\Broken Acquisition.vi"\r\n'
+    'Search failed to find "Missing Helper.vi"\r\n'
+    'Caller: "C:\\work\\Utilities\\Loader.vi"\r\n'
+    "Mass Compile finished with 2 bad VIs.\r\n"
+)
+
+
+def _host_side_of_out_mount(argv: list[str]) -> str:
+    for suffix in (":C:\\out", ":/out"):
+        for arg in argv:
+            if arg.endswith(suffix):
+                return arg[: -len(suffix)]
+    raise AssertionError(f"no output mount in {argv!r}")
+
+
+def _fake_container(monkeypatch, *, exit_code: int, log_text: str | None = CONTAINER_LOG):
+    """Patch docker out, writing ``log_text`` where the container would."""
+
+    monkeypatch.setattr(container_module.shutil, "which", lambda _name: "/usr/bin/docker")
+    calls: list[list[str]] = []
+
+    def fake_run(argv, *args, **kwargs):
+        calls.append(argv)
+        if log_text is not None:
+            # Translate the in-container log path back to the bind-mounted host
+            # directory, which is what the real container writes through. A
+            # Windows mount spec contains the drive-letter colon, so the
+            # container half is stripped as a known suffix rather than by split.
+            out_host = Path(_host_side_of_out_mount(argv))
+            out_host.mkdir(parents=True, exist_ok=True)
+            (out_host / "mass_compile.log").write_bytes(log_text.encode("utf-16"))
+        return subprocess.CompletedProcess(argv, exit_code, stdout="", stderr="")
+
+    monkeypatch.setattr(container_module.subprocess, "run", fake_run)
+    return calls
+
+
+@pytest.fixture
+def labview_repo(tmp_path):
+    """A minimal checkout with the VIs the fake log refers to."""
+
+    (tmp_path / "Signal Generator").mkdir()
+    (tmp_path / "Utilities").mkdir()
+    for rel in (
+        "Signal Generator/Broken Acquisition.vi",
+        "Signal Generator/Generate Sine.vi",
+        "Utilities/Loader.vi",
+        "Utilities/Clamp.vi",
+    ):
+        (tmp_path / rel).write_text("stub VI")
+    (tmp_path / "Demo.lvproj").write_text("stub project")
+    return tmp_path
+
+
+def test_windows_mass_compile_parses_container_log(monkeypatch, labview_repo):
+    calls = _fake_container(monkeypatch, exit_code=3)
+    runner = ContainerRunner(LabVIEWConfig(runner="container", image=WINDOWS_IMAGE), labview_repo)
+
+    result = runner.mass_compile(["**/*.vi", "**/*.ctl"], ["**/*.lvproj"])
+
+    # The invocation that would have reached Docker is Windows-shaped.
+    argv = calls[0]
+    assert argv[:3] == ["docker", "run", "--rm"]
+    assert argv[argv.index("-DirectoryToCompile") + 1] == "C:\\work"
+    assert argv[argv.index("-LogFilePath") + 1] == "C:\\out\\mass_compile.log"
+    assert "-Headless" in argv
+
+    assert result.status is Status.FAILED
+    assert result.total == 4
+    assert result.broken == 2
+    assert result.compiled == 2
+
+    by_path = {vi.path: vi for vi in result.vis}
+    assert by_path["Signal Generator/Broken Acquisition.vi"].broken is True
+    assert by_path["Utilities/Loader.vi"].missing_dependencies == ["Missing Helper.vi"]
+
+
+def test_clean_container_run_passes(monkeypatch, labview_repo):
+    clean_log = "Operation: MassCompile\r\nMass Compile completed.\r\n"
+    _fake_container(monkeypatch, exit_code=0, log_text=clean_log)
+    runner = ContainerRunner(LabVIEWConfig(runner="container", image=WINDOWS_IMAGE), labview_repo)
+
+    result = runner.mass_compile(["**/*.vi"], ["**/*.lvproj"])
+
+    assert result.status is Status.PASSED
+    assert result.broken == 0
+    assert result.total == 4
+
+
+def test_container_failure_exit_code_raises(monkeypatch, labview_repo):
+    _fake_container(monkeypatch, exit_code=1, log_text=None)
+    runner = ContainerRunner(LabVIEWConfig(runner="container", image=WINDOWS_IMAGE), labview_repo)
+
+    with pytest.raises(ContainerRunnerError):
+        runner.mass_compile(["**/*.vi"], ["**/*.lvproj"])
+
+
+def test_capability_summarises_container_result(monkeypatch, labview_repo):
+    _fake_container(monkeypatch, exit_code=3)
+    runner = ContainerRunner(LabVIEWConfig(runner="container", image=WINDOWS_IMAGE), labview_repo)
+
+    capability = run_mass_compile(runner, MassCompileConfig())
+
+    assert capability.status is Status.FAILED
+    assert capability.summary == "2 of 4 VIs broken."
+
+
+def test_pipeline_and_report_over_container_runner(monkeypatch, labview_repo, tmp_path):
+    from fscicd.config import CapabilitiesConfig, UnitTestsConfig, ViAnalyzerConfig
+    from fscicd.report import write_reports
+
+    _fake_container(monkeypatch, exit_code=3)
+    config = Config(
+        project_name="Windows Container Demo",
+        labview=LabVIEWConfig(runner="container", image=WINDOWS_IMAGE),
+        capabilities=CapabilitiesConfig(
+            mass_compile=MassCompileConfig(enabled=True),
+            vi_analyzer=ViAnalyzerConfig(enabled=False),
+            unit_tests=UnitTestsConfig(enabled=False),
+        ),
+    )
+
+    result = run_pipeline(config, labview_repo, "abc123")
+    assert result.status is Status.FAILED
+
+    # Disabled capabilities are reported as skipped rather than omitted, so a
+    # Windows run never tries to parse a report the operation did not write.
+    by_name = {c.name: c for c in result.capabilities}
+    assert by_name["Mass Compile"].status is Status.FAILED
+    assert by_name["VI Analyzer"].status is Status.SKIPPED
+    assert by_name["Unit Tests"].status is Status.SKIPPED
+
+    paths = write_reports(result, tmp_path / "reports")
+    html = paths["html"].read_text()
+    assert "Broken Acquisition.vi" in html
+    assert "Missing Helper.vi" in html

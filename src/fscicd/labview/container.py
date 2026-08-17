@@ -3,8 +3,12 @@
 LabVIEW 2026 Q1+ supports a ``-Headless`` mode that runs ``LabVIEWCLI``
 operations with **no license activation** for CI/CD workflows. This runner
 mounts the checkout into ``nationalinstruments/labview:*`` and invokes
-``LabVIEWCLI`` for Mass Compile and VI Analyzer, then parses the JSON reports
-the worker writes to a mounted output directory.
+``LabVIEWCLI``, then parses the reports the operation leaves in a mounted
+output directory.
+
+Mass Compile has no machine-readable output: ``LabVIEWCLI`` writes a plain-text
+log, so :func:`parse_masscompile_log` reads the markers LabVIEW emits for VIs it
+could not load and for subVIs it could not resolve.
 
 Docker is not required to develop the rest of FSCICD; the mock runner covers
 local testing. The command builders here are pure and unit-tested so the exact
@@ -13,10 +17,13 @@ invocation can be verified without a LabVIEW install.
 
 from __future__ import annotations
 
+import codecs
 import json
+import re
 import shutil
 import subprocess
 import xml.etree.ElementTree as ET
+from dataclasses import dataclass
 from pathlib import Path
 
 from fscicd.labview.base import LabVIEWRunner
@@ -30,8 +37,38 @@ from fscicd.models import (
     ViCompileResult,
 )
 
-CONTAINER_WORKDIR = "/work"
-CONTAINER_OUTDIR = "/out"
+# MassCompile returns 3 when it finished but flagged some VIs as bad. That is a
+# reportable outcome, not a runner failure, so the log still gets parsed.
+MASSCOMPILE_PARTIAL_EXIT = 3
+
+
+@dataclass(frozen=True)
+class ContainerPaths:
+    """In-container mount points and LabVIEW location for one platform."""
+
+    workdir: str
+    outdir: str
+    labview_path: str
+
+    def out(self, name: str) -> str:
+        sep = "\\" if "\\" in self.outdir else "/"
+        return f"{self.outdir}{sep}{name}"
+
+
+def container_paths(platform: str, version: str) -> ContainerPaths:
+    """Return the mount layout for a Windows or Linux NI LabVIEW image."""
+
+    if platform == "windows":
+        return ContainerPaths(
+            workdir="C:\\work",
+            outdir="C:\\out",
+            labview_path=(
+                f"C:\\Program Files\\National Instruments\\LabVIEW {version}\\LabVIEW.exe"
+            ),
+        )
+    # The Linux images install under a versioned /usr/local/natinst path that
+    # varies by tag, so let LabVIEWCLI resolve the executable itself.
+    return ContainerPaths(workdir="/work", outdir="/out", labview_path="")
 
 
 class ContainerRunnerError(RuntimeError):
@@ -41,34 +78,45 @@ class ContainerRunnerError(RuntimeError):
 class ContainerRunner(LabVIEWRunner):
     """Executes LabVIEW automation inside the official NI Docker image."""
 
+    @property
+    def paths(self) -> ContainerPaths:
+        return container_paths(self.config.platform, self.config.version)
+
     def _base_docker_args(self, out_dir: Path) -> list[str]:
+        paths = self.paths
         args = [
             "docker",
             "run",
             "--rm",
             "-v",
-            f"{self.repo_path.resolve()}:{CONTAINER_WORKDIR}",
+            f"{self.repo_path.resolve()}:{paths.workdir}",
             "-v",
-            f"{out_dir.resolve()}:{CONTAINER_OUTDIR}",
+            f"{out_dir.resolve()}:{paths.outdir}",
         ]
         if self.config.headless:
             args += ["-e", "LV_RTE_HEADLESS=1"]
         args.append(self.config.image)
         return args
 
+    def _labview_path_args(self) -> list[str]:
+        path = self.paths.labview_path
+        return ["-LabVIEWPath", path] if path else []
+
     def build_masscompile_command(self, out_dir: Path) -> list[str]:
         """Return the full ``docker run ... LabVIEWCLI`` argv for Mass Compile."""
 
+        paths = self.paths
         cmd = self._base_docker_args(out_dir)
         cmd += [
             "LabVIEWCLI",
             "-OperationName",
             "MassCompile",
             "-DirectoryToCompile",
-            CONTAINER_WORKDIR,
+            paths.workdir,
             "-LogFilePath",
-            f"{CONTAINER_OUTDIR}/mass_compile.log",
+            paths.out("mass_compile.log"),
         ]
+        cmd += self._labview_path_args()
         if self.config.headless:
             cmd.append("-Headless")
         return cmd
@@ -76,18 +124,20 @@ class ContainerRunner(LabVIEWRunner):
     def build_vianalyzer_command(self, out_dir: Path, config_path: str) -> list[str]:
         """Return the full ``docker run ... LabVIEWCLI`` argv for VI Analyzer."""
 
+        paths = self.paths
         cmd = self._base_docker_args(out_dir)
         cmd += [
             "LabVIEWCLI",
             "-OperationName",
             "RunVIAnalyzer",
             "-ConfigPath",
-            config_path or f"{CONTAINER_WORKDIR}/.fscicd/vi-analyzer.viancfg",
+            config_path or paths.out("vi-analyzer.viancfg"),
             "-ReportPath",
-            f"{CONTAINER_OUTDIR}/vi_analyzer.json",
+            paths.out("vi_analyzer.json"),
             "-ReportType",
             "JSON",
         ]
+        cmd += self._labview_path_args()
         if self.config.headless:
             cmd.append("-Headless")
         return cmd
@@ -99,6 +149,7 @@ class ContainerRunner(LabVIEWRunner):
         (Caraya / VI Tester / NI UTF) headlessly and emits a JUnit XML report.
         """
 
+        paths = self.paths
         cmd = self._base_docker_args(out_dir)
         cmd += [
             "LabVIEWCLI",
@@ -107,66 +158,169 @@ class ContainerRunner(LabVIEWRunner):
             "-TestFramework",
             framework,
             "-ProjectPath",
-            CONTAINER_WORKDIR,
+            paths.workdir,
             "-JUnitReportPath",
-            f"{CONTAINER_OUTDIR}/unit_tests.xml",
+            paths.out("unit_tests.xml"),
         ]
+        cmd += self._labview_path_args()
         if self.config.headless:
             cmd.append("-Headless")
         return cmd
 
-    def _run(self, argv: list[str]) -> None:
+    def _run(self, argv: list[str], ok_codes: tuple[int, ...] = (0,)) -> int:
         if shutil.which("docker") is None:
             raise ContainerRunnerError(
                 "docker executable not found; use runner: mock for local development "
                 "or run on a host with Docker and the NI LabVIEW image available."
             )
         proc = subprocess.run(argv, capture_output=True, text=True)  # noqa: S603
-        if proc.returncode != 0:
+        if proc.returncode not in ok_codes:
             raise ContainerRunnerError(
                 f"LabVIEW container command failed ({proc.returncode}):\n{proc.stderr}"
             )
+        return proc.returncode
+
+    def _out_dir(self) -> Path:
+        out_dir = self.repo_path / "build" / "labview-out"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        return out_dir
 
     def mass_compile(self, vi_globs: list[str], project_globs: list[str]) -> MassCompileResult:
-        out_dir = self.repo_path / "build" / "labview-out"
-        out_dir.mkdir(parents=True, exist_ok=True)
-        self._run(self.build_masscompile_command(out_dir))
-        return parse_masscompile_report(out_dir / "mass_compile.json")
+        out_dir = self._out_dir()
+        exit_code = self._run(
+            self.build_masscompile_command(out_dir),
+            ok_codes=(0, MASSCOMPILE_PARTIAL_EXIT),
+        )
+        return parse_masscompile_log(
+            out_dir / "mass_compile.log",
+            exit_code=exit_code,
+            total_vis=len(self.discover(vi_globs)),
+        )
 
     def vi_analyzer(self, config_path: str) -> ViAnalyzerResult:
-        out_dir = self.repo_path / "build" / "labview-out"
-        out_dir.mkdir(parents=True, exist_ok=True)
+        out_dir = self._out_dir()
         self._run(self.build_vianalyzer_command(out_dir, config_path))
         return parse_vianalyzer_report(out_dir / "vi_analyzer.json")
 
     def unit_tests(self, test_globs: list[str], frameworks: list[str]) -> UnitTestResult:
-        out_dir = self.repo_path / "build" / "labview-out"
-        out_dir.mkdir(parents=True, exist_ok=True)
+        out_dir = self._out_dir()
         framework = frameworks[0] if frameworks else "caraya"
         self._run(self.build_unittest_command(out_dir, framework))
         return parse_junit_report(out_dir / "unit_tests.xml", framework)
 
 
-def parse_masscompile_report(path: Path) -> MassCompileResult:
-    """Parse the worker's Mass Compile JSON report into a structured result."""
+# LabVIEW flags a VI it could not load with a "### Bad VI:" banner followed by a
+# quoted Path, and reports each unresolved subVI as a failed search naming the
+# caller. Both are emitted into the plain-text MassCompile log.
+_BAD_VI_RE = re.compile(r"#+\s*Bad VI\s*:?\s*(?P<name>.*)", re.IGNORECASE)
+_PATH_RE = re.compile(r'Path\s*=\s*"(?P<path>[^"]+)"')
+_SEARCH_FAILED_RE = re.compile(r'Search failed to find\s+"(?P<missing>[^"]+)"', re.IGNORECASE)
+_CALLER_RE = re.compile(r'Caller\s*:?\s*"(?P<caller>[^"]+)"')
 
-    data = json.loads(Path(path).read_text())
-    vis = [
-        ViCompileResult(
-            path=item["path"],
-            ok=item.get("ok", True),
-            broken=item.get("broken", False),
-            missing_dependencies=item.get("missing_dependencies", []),
-            message=item.get("message", ""),
+_MARKER_WINDOW = 3
+_BROKEN_MESSAGE = "LabVIEW flagged the VI as bad; it could not load or compile here."
+_MISSING_MESSAGE = "A subVI or dependency could not be found in this container."
+
+
+def read_masscompile_log(path: Path) -> str:
+    """Read a MassCompile log, which LabVIEW may write as UTF-16.
+
+    The encoding is chosen from the bytes rather than by trial decoding: ASCII
+    decodes "successfully" as UTF-16 into mojibake, which would silently hide
+    every marker in the log.
+    """
+
+    raw = Path(path).read_bytes()
+    if raw.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)):
+        return raw.decode("utf-16")
+    if b"\x00" in raw:
+        return raw.decode("utf-16-le", errors="replace")
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return raw.decode("latin-1", errors="replace")
+
+
+def _to_repo_relative(path: str) -> str:
+    """Normalise an in-container VI path to a repo-relative one."""
+
+    normalised = path.replace("\\", "/").strip()
+    for mount in ("c:/work/", "/work/"):
+        if normalised.lower().startswith(mount):
+            return normalised[len(mount) :]
+    return normalised.lstrip("/")
+
+
+def parse_masscompile_log(
+    path: Path,
+    *,
+    exit_code: int = 0,
+    total_vis: int | None = None,
+) -> MassCompileResult:
+    """Parse a ``LabVIEWCLI -OperationName MassCompile`` log into a result.
+
+    ``total_vis`` is the number of VIs the pipeline expected to compile (counted
+    from the checkout), which the log itself does not report.
+    """
+
+    log_path = Path(path)
+    if not log_path.is_file():
+        raise ContainerRunnerError(
+            f"Mass Compile log not found at {log_path}; the container produced no log."
         )
-        for item in data.get("vis", [])
-    ]
+
+    lines = read_masscompile_log(log_path).splitlines()
+    problems: dict[str, ViCompileResult] = {}
+
+    def problem_for(vi_path: str) -> ViCompileResult:
+        rel = _to_repo_relative(vi_path)
+        if rel not in problems:
+            problems[rel] = ViCompileResult(path=rel, ok=True)
+        return problems[rel]
+
+    for index, line in enumerate(lines):
+        # LabVIEW hard-wraps the log, so a marker's details can land on the next
+        # line or two; match against a small window rather than a single line.
+        window = " ".join(lines[index : index + _MARKER_WINDOW])
+
+        bad_vi = _BAD_VI_RE.search(line)
+        if bad_vi:
+            quoted = _PATH_RE.search(window)
+            name = quoted.group("path") if quoted else bad_vi.group("name").strip().strip('"')
+            if name:
+                vi = problem_for(name)
+                vi.ok = False
+                vi.broken = True
+                vi.message = vi.message or _BROKEN_MESSAGE
+            continue
+
+        search_failed = _SEARCH_FAILED_RE.search(line)
+        if search_failed:
+            caller = _CALLER_RE.search(window)
+            if caller:
+                vi = problem_for(caller.group("caller"))
+                vi.ok = False
+                missing = search_failed.group("missing").strip()
+                if missing not in vi.missing_dependencies:
+                    vi.missing_dependencies.append(missing)
+                vi.message = vi.message or _MISSING_MESSAGE
+
+    vis = [problems[key] for key in sorted(problems)]
     broken = sum(1 for v in vis if not v.ok)
-    status = Status.FAILED if broken else (Status.PASSED if vis else Status.SKIPPED)
+    total = total_vis if total_vis is not None else len(vis)
+    total = max(total, len(vis))
+
+    if broken or exit_code not in (0, MASSCOMPILE_PARTIAL_EXIT):
+        status = Status.FAILED
+    elif total:
+        status = Status.PASSED
+    else:
+        status = Status.SKIPPED
+
     return MassCompileResult(
         status=status,
-        total=len(vis),
-        compiled=len(vis) - broken,
+        total=total,
+        compiled=total - broken,
         broken=broken,
         vis=vis,
     )

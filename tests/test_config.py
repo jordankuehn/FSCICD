@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from fscicd.config import ConfigError, load_config, parse_config
@@ -64,3 +66,19 @@ def test_load_config_reads_example(tmp_path):
 def test_load_missing_config_raises(tmp_path):
     with pytest.raises(ConfigError):
         load_config(tmp_path / "nope.yml")
+
+
+def test_shipped_example_configs_load():
+    examples = Path(__file__).resolve().parents[1] / "examples"
+
+    mock_cfg = load_config(examples / "fscicd.yml")
+    assert mock_cfg.labview.runner == "mock"
+
+    windows_cfg = load_config(examples / "fscicd.windows.yml")
+    assert windows_cfg.labview.runner == "container"
+    assert windows_cfg.labview.platform == "windows"
+    # Only the capabilities whose real report parsing is implemented may be
+    # enabled for container runs, or the pipeline breaks on a Windows runner.
+    assert windows_cfg.capabilities.mass_compile.enabled is True
+    assert windows_cfg.capabilities.vi_analyzer.enabled is False
+    assert windows_cfg.capabilities.unit_tests.enabled is False

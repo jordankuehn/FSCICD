@@ -1,9 +1,11 @@
-# FSCICD LabVIEW CI (runs on the GitHub mirror of the Bitbucket repo).
+---
+# Smoke test for the FSCICD orchestrator itself, on the GitHub remote of this
+# tooling repository.
 #
-# Option B: Bitbucket repos are mirrored into GitHub and this workflow drives
-# the LabVIEW CI engine. Mass Compile + VI Analyzer run inside the NI headless
-# LabVIEW container; FSCICD renders the report and posts a build status back to
-# Bitbucket.
+# LabVIEW application repositories no longer run CI here: they run FSCICD on
+# Bitbucket Pipelines against a self-hosted Windows runner (see
+# bitbucket-pipelines.yml and examples/bitbucket-pipelines.app-repo.yml). The
+# Bitbucket -> GitHub mirror that Option B relied on has been retired.
 name: LabVIEW CI
 
 on:
@@ -28,17 +30,20 @@ jobs:
       - name: Install FSCICD
         run: pip install -e .
 
-      - name: Run LabVIEW CI (Mass Compile + VI Analyzer)
+      - name: Run the pipeline against the sample project (mock runner)
         env:
           # Provided as GitHub secrets; used to report status back to Bitbucket.
           BITBUCKET_USERNAME: ${{ secrets.BITBUCKET_USERNAME }}
           BITBUCKET_APP_PASSWORD: ${{ secrets.BITBUCKET_APP_PASSWORD }}
+          RUN_URL: >-
+            ${{ github.server_url }}/${{ github.repository
+            }}/actions/runs/${{ github.run_id }}
         run: |
           fscicd run \
-            --config fscicd.yml \
-            --repo-path . \
+            --config examples/fscicd.yml \
+            --repo-path examples/sample-labview-project \
             --commit "${GITHUB_SHA}" \
-            --report-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            --report-url "${RUN_URL}"
 
       - name: Upload report
         if: always()

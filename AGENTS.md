@@ -4,13 +4,12 @@ FSCICD is a **CI/CD system for LabVIEW code**. It runs Mass Compile and VI
 Analyzer inside NI's official **headless LabVIEW containers**, renders an
 HTML/JSON report, and posts a **Bitbucket** commit build status.
 
-**CI runs on Bitbucket Pipelines. The Bitbucket → GitHub mirror is retired** —
-do not reintroduce it, and do not treat `.github/workflows/` as the LabVIEW CI
+**CI runs on Bitbucket Pipelines. The Bitbucket → GitHub mirror has been deleted**
+— do not reintroduce it, and do not treat `.github/workflows/` as the LabVIEW CI
 engine (it is only a smoke test of the orchestrator on this repo's GitHub
 remote). Real LabVIEW jobs run on a **self-hosted Bitbucket Windows runner**
 (labels `self.hosted`, `windows`, `labview`) because Atlassian hosts no Windows
-runners and the projects target Windows. `src/fscicd/mirror.py` and the
-`fscicd mirror` CLI are legacy leftovers.
+runners and the projects target Windows.
 
 Key packages:
 - `src/fscicd/` — Python package. Entry point CLI is `fscicd` (see `cli.py`).

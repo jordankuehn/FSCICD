@@ -12,7 +12,6 @@ from fscicd.labview.container import (
     parse_masscompile_log,
     parse_vianalyzer_report,
 )
-from fscicd.mirror import MirrorPlan, mirror
 from fscicd.models import Status
 
 WINDOWS_IMAGE = "nationalinstruments/labview:2026q1-windows"
@@ -198,13 +197,3 @@ def test_parse_vianalyzer_report(tmp_path):
     result = parse_vianalyzer_report(report)
     assert result.status is Status.FAILED
     assert result.tested_vis == 1
-
-
-def test_mirror_dry_run_returns_commands():
-    cmds = mirror("origin", "https://github.com/o/r.git", dry_run=True)
-    assert ["git", "push", "--mirror", "https://github.com/o/r.git"] in cmds
-
-
-def test_mirror_plan_commands():
-    plan = MirrorPlan("origin", "https://github.com/o/r.git")
-    assert plan.commands()[-1][1] == "push"

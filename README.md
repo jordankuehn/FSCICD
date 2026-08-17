@@ -107,9 +107,6 @@ fscicd run --config examples/fscicd.windows.yml \
   --repo-path "examples/sample-labview-project" --commit "$(git rev-parse HEAD)"
 ```
 
-`fscicd mirror` remains for the retired Bitbucket → GitHub mirror; it is not part
-of the Bitbucket Pipelines flow.
-
 `fscicd run` writes `report.html` + `report.json` under `report.output_dir` and
 posts a Bitbucket build status (dry-run unless credentials are set).
 

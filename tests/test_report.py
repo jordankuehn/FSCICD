@@ -70,6 +70,45 @@ def test_render_html_contains_key_content():
     assert "caraya" in html
 
 
+def test_render_html_distinguishes_broken_from_missing_dependency():
+    result = PipelineResult(
+        project_name="Demo",
+        commit="abc",
+        capabilities=[
+            CapabilityResult(
+                "Mass Compile",
+                Status.FAILED,
+                "2 of 3 VIs broken.",
+                {
+                    "total": 3,
+                    "compiled": 1,
+                    "broken": 2,
+                    "vis": [
+                        {
+                            "path": "Broken.vi",
+                            "ok": False,
+                            "broken": True,
+                            "missing_dependencies": [],
+                            "message": "LabVIEW flagged the VI as bad.",
+                        },
+                        {
+                            "path": "Loader.vi",
+                            "ok": False,
+                            "broken": False,
+                            "missing_dependencies": ["Helper.vi"],
+                            "message": "A subVI could not be found.",
+                        },
+                    ],
+                },
+            )
+        ],
+    )
+    html = render_html(result)
+    assert "BROKEN" in html
+    assert "MISSING DEPENDENCY" in html
+    assert "Helper.vi" in html
+
+
 def test_render_json_roundtrips():
     payload = json.loads(render_json(_sample_result()))
     assert payload["status"] == "FAILED"

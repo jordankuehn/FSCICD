@@ -209,9 +209,30 @@ class ContainerRunner(LabVIEWRunner):
         return parse_junit_report(out_dir / "unit_tests.xml", framework)
 
 
-# LabVIEW flags a VI it could not load with a "### Bad VI:" banner followed by a
-# quoted Path, and reports each unresolved subVI as a failed search naming the
-# caller. Both are emitted into the plain-text MassCompile log.
+# LabVIEW 2026 reports one line per file it considered, e.g.
+#
+#     CompileFile: error 74 at C:\work\Signal Generator.lvproj
+#     CompileFile: skipping C:\work\Signal Generator\Apply Window.vi
+#
+# See tests/fixtures/masscompile_windows_2026.log for a captured log.
+_COMPILE_ERROR_RE = re.compile(
+    r"^\s*CompileFile:\s+error\s+(?P<code>-?\d+)\s+at\s+(?P<path>.+?)\s*$",
+    re.IGNORECASE,
+)
+_COMPILE_SKIP_RE = re.compile(r"^\s*CompileFile:\s+skipping\s+(?P<path>.+?)\s*$", re.IGNORECASE)
+_COMPILE_OTHER_RE = re.compile(
+    r"^\s*CompileFile:\s+(?P<verb>\S+)\s+(?P<path>.+?)\s*$", re.IGNORECASE
+)
+
+# The operation's own verdict. It reports success even when individual files
+# errored, so it is a signal rather than the whole answer.
+_OPERATION_RESULT_RE = re.compile(
+    r"^\s*MassCompile operation\s+(?P<outcome>succeeded|failed)", re.IGNORECASE
+)
+
+# Additional markers seen in other LabVIEW log variants. Not observed in the
+# 2026 container output, kept because they cost nothing and are specific enough
+# not to collide with the "#### Starting Mass Compile" banners.
 _BAD_VI_RE = re.compile(r"#+\s*Bad VI\s*:?\s*(?P<name>.*)", re.IGNORECASE)
 _PATH_RE = re.compile(r'Path\s*=\s*"(?P<path>[^"]+)"')
 _SEARCH_FAILED_RE = re.compile(r'Search failed to find\s+"(?P<missing>[^"]+)"', re.IGNORECASE)
@@ -259,8 +280,13 @@ def parse_masscompile_log(
 ) -> MassCompileResult:
     """Parse a ``LabVIEWCLI -OperationName MassCompile`` log into a result.
 
-    ``total_vis`` is the number of VIs the pipeline expected to compile (counted
-    from the checkout), which the log itself does not report.
+    The log is the only output the operation produces. It reports one
+    ``CompileFile:`` line per file considered, and its own
+    ``MassCompile operation succeeded`` verdict is not trustworthy on its own:
+    LabVIEW reports success even when individual files errored.
+
+    ``total_vis`` is the number of VIs the pipeline expected to compile, counted
+    from the checkout, and is used only when the log names no files at all.
     """
 
     log_path = Path(path)
@@ -271,6 +297,9 @@ def parse_masscompile_log(
 
     lines = read_masscompile_log(log_path).splitlines()
     problems: dict[str, ViCompileResult] = {}
+    seen: set[str] = set()
+    skipped: set[str] = set()
+    operation_failed = False
 
     def problem_for(vi_path: str) -> ViCompileResult:
         rel = _to_repo_relative(vi_path)
@@ -279,6 +308,33 @@ def parse_masscompile_log(
         return problems[rel]
 
     for index, line in enumerate(lines):
+        outcome = _OPERATION_RESULT_RE.match(line)
+        if outcome:
+            operation_failed = outcome.group("outcome").lower() == "failed"
+            continue
+
+        error = _COMPILE_ERROR_RE.match(line)
+        if error:
+            rel = _to_repo_relative(error.group("path"))
+            seen.add(rel)
+            vi = problem_for(error.group("path"))
+            vi.ok = False
+            vi.broken = True
+            vi.message = f"LabVIEW error {error.group('code')} while compiling this file."
+            continue
+
+        skip = _COMPILE_SKIP_RE.match(line)
+        if skip:
+            rel = _to_repo_relative(skip.group("path"))
+            seen.add(rel)
+            skipped.add(rel)
+            continue
+
+        other = _COMPILE_OTHER_RE.match(line)
+        if other:
+            seen.add(_to_repo_relative(other.group("path")))
+            continue
+
         # LabVIEW hard-wraps the log, so a marker's details can land on the next
         # line or two; match against a small window rather than a single line.
         window = " ".join(lines[index : index + _MARKER_WINDOW])
@@ -288,6 +344,7 @@ def parse_masscompile_log(
             quoted = _PATH_RE.search(window)
             name = quoted.group("path") if quoted else bad_vi.group("name").strip().strip('"')
             if name:
+                seen.add(_to_repo_relative(name))
                 vi = problem_for(name)
                 vi.ok = False
                 vi.broken = True
@@ -298,6 +355,7 @@ def parse_masscompile_log(
         if search_failed:
             caller = _CALLER_RE.search(window)
             if caller:
+                seen.add(_to_repo_relative(caller.group("caller")))
                 vi = problem_for(caller.group("caller"))
                 vi.ok = False
                 missing = search_failed.group("missing").strip()
@@ -305,12 +363,18 @@ def parse_masscompile_log(
                     vi.missing_dependencies.append(missing)
                 vi.message = vi.message or _MISSING_MESSAGE
 
+    # Only problem files are listed individually; a real project skips thousands
+    # of already-current VIs and listing them would drown the report.
     vis = [problems[key] for key in sorted(problems)]
     broken = sum(1 for v in vis if not v.ok)
-    total = total_vis if total_vis is not None else len(vis)
-    total = max(total, len(vis))
+    # Both are lower bounds on the number of files considered: the CompileFile
+    # format enumerates every file, while the marker-only variants name just the
+    # problems, so the checkout's own VI count is the better denominator there.
+    total = max(len(seen), total_vis or 0, len(vis))
+    skipped_count = len(skipped - set(problems))
+    compiled = max(total - broken - skipped_count, 0)
 
-    if broken or exit_code not in (0, MASSCOMPILE_PARTIAL_EXIT):
+    if broken or operation_failed or exit_code not in (0, MASSCOMPILE_PARTIAL_EXIT):
         status = Status.FAILED
     elif total:
         status = Status.PASSED
@@ -320,8 +384,9 @@ def parse_masscompile_log(
     return MassCompileResult(
         status=status,
         total=total,
-        compiled=total - broken,
+        compiled=compiled,
         broken=broken,
+        skipped=skipped_count,
         vis=vis,
     )
 

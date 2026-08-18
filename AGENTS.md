@@ -46,11 +46,28 @@ Key packages:
   `-LabVIEWPath` for Windows, or `/work`/`/out` for Linux. See
   `container_paths()` in `src/fscicd/labview/container.py`.
 - **Mass Compile has no machine-readable output.** `LabVIEWCLI` writes a
-  plain-text log (sometimes UTF-16), so `parse_masscompile_log()` reads the
-  `### Bad VI:` / `Search failed to find ... Caller:` markers. Exit code `3` means
-  "finished with bad VIs" and must be parsed, not treated as a runner error. VI
-  Analyzer and Unit Tests still parse report shapes the real operations do not
-  emit, so they are disabled in `examples/fscicd.windows.yml` until ported.
+  plain-text log, so `parse_masscompile_log()` reads it. The real 2026 container
+  format is one `CompileFile:` line per file — see the captured
+  `tests/fixtures/masscompile_windows_2026.log`:
+
+  ```
+  CompileFile: error 74 at C:\work\Signal Generator.lvproj
+  CompileFile: skipping C:\work\Signal Generator\Apply Window.vi
+  MassCompile operation succeeded.
+  ```
+
+  Three traps, all of which produced a **false green** before being fixed:
+  the operation reports `succeeded` even when individual files errored, so its
+  verdict cannot be trusted alone; the exit code is `0` in that case too; and the
+  log is ASCII/CRLF, so encoding must be sniffed by BOM/NUL rather than by trial
+  decoding (ASCII decodes "successfully" as UTF-16 into mojibake and every marker
+  silently disappears). A `skipping` line is *not* treated as a failure — LabVIEW
+  does not say why it skipped, so an already-current VI and an unreadable one look
+  identical — but compiled/skipped counts are always reported so "skipped
+  everything" cannot masquerade as "compiled cleanly".
+- VI Analyzer and Unit Tests still parse report shapes the real operations do not
+  emit, so they are disabled in `examples/fscicd.windows.yml` until ported. Treat
+  any capability's parser as unproven until a real log is captured as a fixture.
 - **Mock results are deterministic by file path** (seeded from the VI path): a VI
   whose name contains `broken` is reported broken, `missing` yields a missing
   dependency, VI Analyzer findings are stable per path, and a unit-test VI whose

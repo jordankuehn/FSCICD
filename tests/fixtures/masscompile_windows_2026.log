@@ -1,0 +1,23 @@
+Using LabVIEW: "C:\Program Files\National Instruments\LabVIEW 2026\LabVIEW.exe"
+LabVIEW launched successfully.
+Connection established with LabVIEW at port number 3363.
+
+Operation output: 
+#### Starting Mass Compile: Tue, Aug 18, 2026 10:25:41 AM
+  Directory: "C:\work"
+CompileFile: error 74 at C:\work\Signal Generator.lvproj
+CompileFile: skipping C:\work\Signal Generator\Apply Window.vi
+CompileFile: skipping C:\work\Signal Generator\Compute FFT.vi
+CompileFile: skipping C:\work\Signal Generator\Generate Sine.vi
+CompileFile: skipping C:\work\Signal Generator\Generate Triangle.vi
+CompileFile: skipping C:\work\Signal Generator\Main.vi
+CompileFile: skipping C:\work\Tests\Test Clamp.vi
+CompileFile: skipping C:\work\Tests\Test Generate Sine.vi
+CompileFile: skipping C:\work\Tests\Test Moving Average.vi
+CompileFile: skipping C:\work\Utilities\Clamp.vi
+CompileFile: skipping C:\work\Utilities\Config Cluster.ctl
+CompileFile: skipping C:\work\Utilities\Format Timestamp.vi
+CompileFile: skipping C:\work\Utilities\Moving Average.vi
+#### Finished Mass Compile: Tue, Aug 18, 2026 10:25:41 AM
+
+MassCompile operation succeeded.

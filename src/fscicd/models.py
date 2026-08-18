@@ -37,6 +37,10 @@ class MassCompileResult:
     total: int
     compiled: int
     broken: int
+    # Files LabVIEW reported as skipped. It does not say why, so a skip is not
+    # treated as a failure: an already-current VI and an unreadable one look the
+    # same in the log.
+    skipped: int = 0
     vis: list[ViCompileResult] = field(default_factory=list)
 
     @property

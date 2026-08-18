@@ -8,7 +8,7 @@ import sys
 import click
 
 from fscicd import __version__
-from fscicd.bitbucket import BitbucketClient
+from fscicd.bitbucket import BitbucketClient, BitbucketError
 from fscicd.config import ConfigError, load_config
 from fscicd.models import Status
 from fscicd.pipeline import run_pipeline
@@ -61,11 +61,15 @@ def run(config_path, repo_path, commit, report_url, no_status):
 
     if not no_status:
         client = BitbucketClient(config.bitbucket.workspace, config.bitbucket.repo_slug)
-        outcome = client.post_build_status(commit, result, report_url)
-        if outcome.get("dry_run"):
-            click.echo("Bitbucket: dry-run (no credentials/workspace configured).")
+        try:
+            outcome = client.post_build_status(commit, result, report_url)
+        except BitbucketError as exc:
+            click.echo(f"Bitbucket: WARNING — {exc}", err=True)
         else:
-            click.echo("Bitbucket: build status posted.")
+            if outcome.get("dry_run"):
+                click.echo("Bitbucket: dry-run (no credentials/workspace configured).")
+            else:
+                click.echo("Bitbucket: build status posted.")
 
     if result.status is Status.FAILED:
         sys.exit(_EXIT_FAILURE)

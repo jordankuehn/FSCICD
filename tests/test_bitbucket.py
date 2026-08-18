@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import pytest
 import responses
 
 from fscicd.bitbucket import (
     API_ROOT,
     BitbucketClient,
     BitbucketCredentials,
+    BitbucketError,
     build_status_payload,
 )
 from fscicd.models import CapabilityResult, PipelineResult, Status
@@ -53,3 +55,15 @@ def test_post_build_status_sends_request():
     assert out["key"] == "FSCICD"
     assert responses.calls[0].request.headers["Authorization"] == "Bearer tok"
     assert b"SUCCESSFUL" in responses.calls[0].request.body
+
+
+@responses.activate
+def test_rejected_status_raises_domain_error():
+    url = f"{API_ROOT}/repositories/w/r/commit/abc123/statuses/build"
+    responses.add(responses.POST, url, json={"error": "nope"}, status=401)
+    client = BitbucketClient("w", "r", BitbucketCredentials(access_token="tok"))
+    with pytest.raises(BitbucketError) as excinfo:
+        client.post_build_status("abc123", _result(Status.PASSED))
+    # The message has to name the coordinates, since wrong workspace/repo_slug is
+    # the most common cause.
+    assert "w/r" in str(excinfo.value)

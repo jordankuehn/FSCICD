@@ -82,7 +82,18 @@ The cloud Linux step needs nothing. The Windows step needs a runner you host:
 Windows runners execute steps in **PowerShell on the host**, not in a container,
 so they are not isolated from your desktop and share its CPU/RAM. Running
 LabVIEW inside the NI container (as this pipeline does) keeps CI away from your
-interactive LabVIEW IDE install.
+interactive LabVIEW IDE install. Two consequences worth knowing:
+
+- **`DOCKER_HOST` must be overridden.** Pipelines injects
+  `DOCKER_HOST=tcp://localhost:2375` for the Docker service it provides on *cloud*
+  runners. A self-hosted Windows runner has no such service — Docker Desktop
+  listens on `npipe:////./pipe/docker_engine` — so without the override every
+  `docker` call fails with `connectex: No connection could be made`. The pipeline
+  sets it per command.
+- **Run the runner unelevated.** Files created by an elevated process are owned by
+  `BUILTIN\Administrators`, which leaves checkouts and artifacts your own account
+  cannot cleanly touch (`git status` reports *dubious ownership*). Docker access
+  comes from the `docker-users` group, not from admin rights.
 
 To add FSCICD to a LabVIEW application repository, copy
 [`examples/bitbucket-pipelines.app-repo.yml`](examples/bitbucket-pipelines.app-repo.yml)

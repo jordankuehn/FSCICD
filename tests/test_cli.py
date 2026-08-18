@@ -49,6 +49,30 @@ def test_cli_run_dry_run_status(sample_repo, tmp_path):
     assert "dry-run" in result.output
 
 
+def test_cli_reports_unreachable_docker_without_a_traceback(sample_repo, tmp_path, monkeypatch):
+    """An unusable LabVIEW backend is an environment fault, not a stack trace."""
+
+    from fscicd import cli as cli_module
+    from fscicd.labview.container import ContainerRunnerError
+
+    def boom(*args, **kwargs):
+        raise ContainerRunnerError(
+            "LabVIEW container command failed (1):\nerror during connect: "
+            'Get "http://localhost:2375/_ping": dial tcp [::1]:2375'
+        )
+
+    monkeypatch.setattr(cli_module, "run_pipeline", boom)
+
+    cfg = _write_config(tmp_path, runner="container")
+    result = CliRunner().invoke(
+        main,
+        ["run", "-c", str(cfg), "-p", str(sample_repo), "--commit", "c1", "--no-status"],
+    )
+    assert result.exit_code != 0
+    assert "LabVIEW backend unavailable" in result.output
+    assert "Traceback" not in result.output
+
+
 def test_cli_run_warns_but_passes_when_status_post_fails(sample_repo, tmp_path, monkeypatch):
     """A rejected build status must not fail a run whose capabilities passed."""
 

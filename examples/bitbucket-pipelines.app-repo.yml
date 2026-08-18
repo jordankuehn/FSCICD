@@ -59,7 +59,16 @@ definitions:
             Write-Error 'FSCICD_INSTALL_SPEC is not set (see the setup notes at
             the top of this file).'; exit 1 }
           - .venv\Scripts\python -m pip install "${env:FSCICD_INSTALL_SPEC}"
+          # Pipelines injects DOCKER_HOST=tcp://localhost:2375 for the Docker
+          # service it runs on CLOUD runners. A self-hosted Windows runner has no
+          # such service - Docker Desktop listens on a named pipe - so that value
+          # has to be overridden or every docker call dials a dead port. Set per
+          # command, since each script line may be its own PowerShell process.
           - >
+            $env:DOCKER_HOST = 'npipe:////./pipe/docker_engine';
+            docker info --format '{{.OSType}}'
+          - >
+            $env:DOCKER_HOST = 'npipe:////./pipe/docker_engine';
             .venv\Scripts\fscicd run
             --config fscicd.yml
             --repo-path .

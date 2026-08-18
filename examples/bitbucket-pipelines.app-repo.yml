@@ -21,14 +21,15 @@
 # 4. Commit an `fscicd.yml` to this repo (see examples/fscicd.windows.yml).
 #
 # 5. Add a secured repository variable FSCICD_INSTALL_SPEC telling pip where to
-#    install the orchestrator from. Self-hosted Windows runners do not support
-#    Bitbucket Pipelines SSH keys, so a private source needs an HTTPS token:
+#    install the orchestrator from. Self-hosted Windows runners cannot use
+#    Bitbucket Pipelines SSH keys, so a private source needs an HTTPS token -
+#    create one on the fscicd repo under Repository settings > Access tokens with
+#    the `Repositories: Read` scope:
 #
-#      Bitbucket: git+https://x-token-auth:<token>@bitbucket.org/<workspace>/fscicd.git@main
-#      GitHub:    git+https://<token>@github.com/<owner>/fscicd.git@main
+#      git+https://x-token-auth:<token>@bitbucket.org/<workspace>/fscicd.git@main
 #
-#    Pin `@main` to a tag once the tooling stabilises. If the orchestrator repo
-#    is public, the token may be omitted.
+#    Pin `@main` to a tag once the tooling stabilises. The token may be omitted
+#    if the orchestrator repo is public.
 #
 # 6. Optional, for commit build statuses: add BITBUCKET_USERNAME and
 #    BITBUCKET_APP_PASSWORD as secured repository variables. Without them status

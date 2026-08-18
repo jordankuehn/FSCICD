@@ -6,7 +6,8 @@ NI's official **headless LabVIEW containers**, with results rendered as a
 shareable report and reported back to **Bitbucket** as commit build statuses.
 
 CI runs **entirely on Bitbucket**: Bitbucket is the code of record *and* the CI
-host, via **Bitbucket Pipelines**. There is no GitHub mirror.
+host, via **Bitbucket Pipelines**. There is no GitHub mirror and no GitHub
+Actions workflow.
 
 Because most LabVIEW work targets Windows — and Atlassian does not offer hosted
 Windows runners — the real LabVIEW jobs run on a **self-hosted Bitbucket Windows
@@ -133,7 +134,6 @@ LabVIEW backend, enabled capabilities, and reporting.
 | `docker/labview-worker.Dockerfile` | Linux worker built on the NI headless image |
 | `bitbucket-pipelines.yml` | This repo's CI: cloud self-test + Windows LabVIEW step |
 | `examples/bitbucket-pipelines.app-repo.yml` | Pipeline template for a LabVIEW app repo |
-| `.github/workflows/labview-ci.yml` | Smoke test of the orchestrator on the GitHub remote |
 | `examples/` | Example configs + sample LabVIEW project fixtures |
 | `tests/` | pytest suite |
 
@@ -143,7 +143,7 @@ LabVIEW backend, enabled capabilities, and reporting.
 .venv/bin/ruff check .        # lint
 .venv/bin/ruff format --check .
 .venv/bin/pytest              # tests
-.venv/bin/yamllint .github/workflows bitbucket-pipelines.yml examples
+.venv/bin/yamllint bitbucket-pipelines.yml examples
 ```
 
 ## Status

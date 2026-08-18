@@ -4,12 +4,12 @@ FSCICD is a **CI/CD system for LabVIEW code**. It runs Mass Compile and VI
 Analyzer inside NI's official **headless LabVIEW containers**, renders an
 HTML/JSON report, and posts a **Bitbucket** commit build status.
 
-**CI runs on Bitbucket Pipelines. The Bitbucket → GitHub mirror has been deleted**
-— do not reintroduce it, and do not treat `.github/workflows/` as the LabVIEW CI
-engine (it is only a smoke test of the orchestrator on this repo's GitHub
-remote). Real LabVIEW jobs run on a **self-hosted Bitbucket Windows runner**
-(labels `self.hosted`, `windows`, `labview`) because Atlassian hosts no Windows
-runners and the projects target Windows.
+**Bitbucket is the only home: code of record and CI host.** The Bitbucket →
+GitHub mirror and the GitHub Actions workflow have both been deleted — do not
+reintroduce either. CI is `bitbucket-pipelines.yml`, and real LabVIEW jobs run on
+a **self-hosted Bitbucket Windows runner** (labels `self.hosted`, `windows`,
+`labview`) because Atlassian hosts no Windows runners and the projects target
+Windows.
 
 Key packages:
 - `src/fscicd/` — Python package. Entry point CLI is `fscicd` (see `cli.py`).
@@ -29,7 +29,7 @@ Key packages:
 - **Standard commands** (all from repo root):
   - Lint: `.venv/bin/ruff check .` and `.venv/bin/ruff format --check .`
   - Tests: `.venv/bin/pytest`
-  - YAML lint (CI configs): `.venv/bin/yamllint .github/workflows bitbucket-pipelines.yml examples`
+  - YAML lint (CI configs): `.venv/bin/yamllint bitbucket-pipelines.yml examples`
   - Run the app (mock): `.venv/bin/fscicd run --config examples/fscicd.yml --repo-path "examples/sample-labview-project" --commit demo`
 - **LabVIEW cannot run in this VM.** There is no NI license/Docker image here, and
   the images are Windows/Linux multi-GB LabVIEW installs. Develop and test with

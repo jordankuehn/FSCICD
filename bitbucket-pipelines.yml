@@ -49,7 +49,7 @@ pipelines:
           - pip install -e ".[dev]"
           - ruff check .
           - ruff format --check .
-          - yamllint .github/workflows bitbucket-pipelines.yml examples
+          - yamllint bitbucket-pipelines.yml examples
           - pytest
           - >
             fscicd run --config examples/fscicd.yml

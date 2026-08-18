@@ -9,6 +9,11 @@
 #     headless LabVIEW container. Atlassian does not host Windows runners, so
 #     this step only runs where such a runner is registered and online.
 #
+# Both steps run against the sample-project fixture, so both pass --no-status:
+# the fixture's configured Bitbucket coordinates are placeholders, and posting a
+# status to a repository that does not exist would fail the step once real
+# credentials are present. Application repos post status; this repo does not.
+#
 # Windows runner prerequisites (see README):
 #   * Docker Desktop switched to Windows containers
 #   * nationalinstruments/labview:<tag>-windows pulled
@@ -34,6 +39,7 @@ definitions:
             --config examples/fscicd.windows.yml
             --repo-path examples/sample-labview-project
             --commit ${env:BITBUCKET_COMMIT}
+            --no-status
         artifacts:
           - build/reports/**
           # The raw LabVIEWCLI log is the ground truth when a compile problem is
@@ -55,6 +61,7 @@ pipelines:
             fscicd run --config examples/fscicd.yml
             --repo-path examples/sample-labview-project
             --commit "$BITBUCKET_COMMIT"
+            --no-status
         artifacts:
           - build/reports/**
     - step: *labview-windows

@@ -26,6 +26,11 @@ from fscicd.models import PipelineResult, Status
 
 log = logging.getLogger("fscicd.bitbucket")
 
+
+class BitbucketError(RuntimeError):
+    """Raised when a build status could not be posted to Bitbucket."""
+
+
 _STATE_MAP = {
     Status.PASSED: "SUCCESSFUL",
     Status.FAILED: "FAILED",
@@ -116,6 +121,14 @@ class BitbucketClient:
             f"{API_ROOT}/repositories/{self.workspace}/{self.repo_slug}"
             f"/commit/{commit}/statuses/build"
         )
-        resp = self.session.post(url, json=payload, timeout=30, **self._auth_kwargs())
-        resp.raise_for_status()
-        return resp.json()
+        try:
+            resp = self.session.post(url, json=payload, timeout=30, **self._auth_kwargs())
+            resp.raise_for_status()
+            return resp.json()
+        except requests.RequestException as exc:
+            # Reporting is not the quality gate: a rejected status (expired
+            # credentials, wrong coordinates) must not turn a passing project
+            # red, but it has to be loud enough to fix.
+            raise BitbucketError(
+                f"could not post build status to {self.workspace}/{self.repo_slug}: {exc}"
+            ) from exc

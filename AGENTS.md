@@ -22,6 +22,10 @@ Key packages:
 
 ## Cursor Cloud specific instructions
 
+- **The environment is defined in `.cursor/environment.json`**, which Cursor
+  resolves ahead of any saved dashboard environment. A clean checkout plus that
+  one install command is enough, so an agent started against the Bitbucket
+  repository needs no dashboard setup.
 - **Python dev env lives in `.venv`.** After the update script runs, use
   `.venv/bin/<tool>` (e.g. `.venv/bin/pytest`, `.venv/bin/ruff`) or activate the
   venv. The package is installed editable, so `src/fscicd` edits take effect

@@ -33,9 +33,12 @@ definitions:
             .venv\Scripts\fscicd run
             --config examples/fscicd.windows.yml
             --repo-path examples/sample-labview-project
-            --commit $env:BITBUCKET_COMMIT
+            --commit ${env:BITBUCKET_COMMIT}
         artifacts:
           - build/reports/**
+          # The raw LabVIEWCLI log is the ground truth when a compile problem is
+          # not reported as expected. It lands under the --repo-path.
+          - examples/sample-labview-project/build/labview-out/**
 
 pipelines:
   default:

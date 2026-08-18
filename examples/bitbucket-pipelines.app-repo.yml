@@ -2,40 +2,78 @@
 # Copy this into a LabVIEW application repository (as bitbucket-pipelines.yml)
 # to run FSCICD against it on a self-hosted Bitbucket Windows runner.
 #
-# This replaces the old "mirror to GitHub" pipeline: CI runs on Bitbucket, so no
-# GitHub mirror or GitHub Actions workflow is involved.
+# CI runs entirely on Bitbucket: no GitHub mirror and no GitHub Actions.
 #
-# One-time setup:
-#   1. Register a Bitbucket Windows runner (Repository settings > Runners) and
-#      note its labels. This file expects: self.hosted, windows, labview.
-#   2. On the runner host: Docker Desktop in Windows-container mode, plus
-#      `docker pull nationalinstruments/labview:2026q1-windows`.
-#   3. On the runner host: Python 3.10+ on PATH.
-#   4. Commit an `fscicd.yml` to this repo (see examples/fscicd.windows.yml).
-#   5. Optional, for commit build statuses: add BITBUCKET_USERNAME and
-#      BITBUCKET_APP_PASSWORD as secured repository variables. Without them
-#      status posting runs in dry-run mode and the pipeline still passes.
+# ---------------------------------------------------------------------------
+# One-time setup
+# ---------------------------------------------------------------------------
+# 1. Register a Windows runner (Workspace settings > Runners, or Repository
+#    settings > Runners). A workspace runner is shared by every repo in the
+#    workspace. This file expects the labels: self.hosted, windows, labview.
+#
+# 2. Enable Pipelines for THIS repo: Repository settings > Pipelines > Settings.
+#    Registering a runner is not enough; Pipelines is a per-repo switch.
+#
+# 3. On the runner host: Docker Desktop in Windows-container mode, plus
+#    `docker pull nationalinstruments/labview:2026q1-windows`, and Python 3.10+
+#    on PATH.
+#
+# 4. Commit an `fscicd.yml` to this repo (see examples/fscicd.windows.yml).
+#
+# 5. Add a secured repository variable FSCICD_INSTALL_SPEC telling pip where to
+#    install the orchestrator from. Self-hosted Windows runners do not support
+#    Bitbucket Pipelines SSH keys, so a private source needs an HTTPS token:
+#
+#      Bitbucket: git+https://x-token-auth:<token>@bitbucket.org/<workspace>/fscicd.git@main
+#      GitHub:    git+https://<token>@github.com/<owner>/fscicd.git@main
+#
+#    Pin `@main` to a tag once the tooling stabilises. If the orchestrator repo
+#    is public, the token may be omitted.
+#
+# 6. Optional, for commit build statuses: add BITBUCKET_USERNAME and
+#    BITBUCKET_APP_PASSWORD as secured repository variables. Without them status
+#    posting runs in dry-run mode and the pipeline still passes.
+#
+# ---------------------------------------------------------------------------
+# Running it
+# ---------------------------------------------------------------------------
+# Pushing a commit runs `default`. To run on demand instead:
+#   Pipelines > Run pipeline > pick the branch > Custom: labview-windows
 
-pipelines:
-  default:
-    - step:
+definitions:
+  steps:
+    - step: &labview-windows
         name: LabVIEW CI (Windows container)
         runs-on:
           - self.hosted
           - windows
           - labview
         script:
+          # Windows runners execute steps in PowerShell on the host and share
+          # that host between steps, so the virtualenv keeps FSCICD and its
+          # dependencies out of the host Python.
           - python -m venv .venv
           - .venv\Scripts\python -m pip install --upgrade pip
-          # Install the FSCICD orchestrator from its Bitbucket repository.
-          # Pin to a tag or commit once the tooling stabilises.
           - >
-            .venv\Scripts\python -m pip install
-            "git+https://bitbucket.org/my-workspace/fscicd.git@main"
+            if (-not $env:FSCICD_INSTALL_SPEC) {
+            Write-Error 'FSCICD_INSTALL_SPEC is not set (see the setup notes at
+            the top of this file).'; exit 1 }
+          - .venv\Scripts\python -m pip install "${env:FSCICD_INSTALL_SPEC}"
           - >
             .venv\Scripts\fscicd run
             --config fscicd.yml
             --repo-path .
-            --commit $env:BITBUCKET_COMMIT
+            --commit ${env:BITBUCKET_COMMIT}
         artifacts:
+          # Keep the raw LabVIEWCLI log alongside the rendered report: it is the
+          # ground truth when a compile problem is not reported as expected.
           - build/reports/**
+          - build/labview-out/**
+
+pipelines:
+  default:
+    - step: *labview-windows
+
+  custom:
+    labview-windows:
+      - step: *labview-windows

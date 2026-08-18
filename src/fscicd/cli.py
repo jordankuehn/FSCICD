@@ -10,6 +10,7 @@ import click
 from fscicd import __version__
 from fscicd.bitbucket import BitbucketClient, BitbucketError
 from fscicd.config import ConfigError, load_config
+from fscicd.labview.container import ContainerRunnerError
 from fscicd.models import Status
 from fscicd.pipeline import run_pipeline
 from fscicd.report import write_reports
@@ -49,7 +50,14 @@ def run(config_path, repo_path, commit, report_url, no_status):
     except ConfigError as exc:
         raise click.ClickException(str(exc)) from exc
 
-    result = run_pipeline(config, repo_path, commit)
+    try:
+        result = run_pipeline(config, repo_path, commit)
+    except ContainerRunnerError as exc:
+        # The LabVIEW backend could not be driven at all (no Docker, unreachable
+        # daemon, missing image). That is an environment fault, not a code-quality
+        # verdict, so report it as one instead of a traceback.
+        raise click.ClickException(f"LabVIEW backend unavailable: {exc}") from exc
+
     paths = write_reports(result, config.report_dir)
 
     click.echo(f"Project : {result.project_name}")

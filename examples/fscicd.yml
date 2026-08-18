@@ -1,3 +1,4 @@
+---
 # FSCICD pipeline configuration.
 #
 # This single file drives the pipeline: which LabVIEW backend runs, which

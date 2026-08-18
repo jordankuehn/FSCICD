@@ -2,16 +2,23 @@
 
 FSCICD is a **CI/CD system for LabVIEW code**. It runs Mass Compile and VI
 Analyzer inside NI's official **headless LabVIEW containers**, renders an
-HTML/JSON report, and posts a **Bitbucket** commit build status. Design is
-**Option B**: Bitbucket is the code of record; repos are mirrored into GitHub so
-the containerized LabVIEW CI runs on GitHub Actions.
+HTML/JSON report, and posts a **Bitbucket** commit build status.
+
+**Bitbucket is the only home: code of record and CI host.** The Bitbucket →
+GitHub mirror and the GitHub Actions workflow have both been deleted — do not
+reintroduce either. CI is `bitbucket-pipelines.yml`, and real LabVIEW jobs run on
+a **self-hosted Bitbucket Windows runner** (labels `self.hosted`, `windows`,
+`labview`) because Atlassian hosts no Windows runners and the projects target
+Windows.
 
 Key packages:
 - `src/fscicd/` — Python package. Entry point CLI is `fscicd` (see `cli.py`).
 - `src/fscicd/labview/` — pluggable LabVIEW backends: `mock` (deterministic
   simulator, no LabVIEW needed) and `container` (real, `docker run` the NI image).
-- `docker/labview-worker.Dockerfile`, `.github/workflows/labview-ci.yml`,
-  `bitbucket-pipelines.yml` — the containerized CI + mirror plumbing.
+- `bitbucket-pipelines.yml` — this repo's CI (cloud self-test + Windows LabVIEW
+  step); `examples/bitbucket-pipelines.app-repo.yml` is the template LabVIEW
+  application repos copy.
+- `docker/labview-worker.Dockerfile` — Linux worker on the NI headless image.
 
 ## Cursor Cloud specific instructions
 
@@ -22,7 +29,7 @@ Key packages:
 - **Standard commands** (all from repo root):
   - Lint: `.venv/bin/ruff check .` and `.venv/bin/ruff format --check .`
   - Tests: `.venv/bin/pytest`
-  - YAML lint (CI configs): `.venv/bin/yamllint .github/workflows bitbucket-pipelines.yml examples/fscicd.yml`
+  - YAML lint (CI configs): `.venv/bin/yamllint bitbucket-pipelines.yml examples`
   - Run the app (mock): `.venv/bin/fscicd run --config examples/fscicd.yml --repo-path "examples/sample-labview-project" --commit demo`
 - **LabVIEW cannot run in this VM.** There is no NI license/Docker image here, and
   the images are Windows/Linux multi-GB LabVIEW installs. Develop and test with
@@ -33,6 +40,17 @@ Key packages:
   or 32-bit — do not add version/bitness branching. Headless mode (`-Headless` /
   `LV_RTE_HEADLESS=1`) skips license activation for CI, so no license server needs
   to be reachable from the runner.
+- **Container platform (Windows vs Linux) *is* branched**, unlike version/bitness:
+  NI's two image families have different mount layouts, so `labview.platform`
+  (inferred from the image tag) selects `C:\work`/`C:\out` + an explicit
+  `-LabVIEWPath` for Windows, or `/work`/`/out` for Linux. See
+  `container_paths()` in `src/fscicd/labview/container.py`.
+- **Mass Compile has no machine-readable output.** `LabVIEWCLI` writes a
+  plain-text log (sometimes UTF-16), so `parse_masscompile_log()` reads the
+  `### Bad VI:` / `Search failed to find ... Caller:` markers. Exit code `3` means
+  "finished with bad VIs" and must be parsed, not treated as a runner error. VI
+  Analyzer and Unit Tests still parse report shapes the real operations do not
+  emit, so they are disabled in `examples/fscicd.windows.yml` until ported.
 - **Mock results are deterministic by file path** (seeded from the VI path): a VI
   whose name contains `broken` is reported broken, `missing` yields a missing
   dependency, VI Analyzer findings are stable per path, and a unit-test VI whose

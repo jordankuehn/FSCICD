@@ -34,10 +34,31 @@ class LabVIEWConfig:
     runner: str = "mock"  # "mock" | "container"
     image: str = "nationalinstruments/labview:2026q1-linux"
     headless: bool = True
+    # Container platform. NI publishes Windows and Linux LabVIEW images whose
+    # filesystem layouts differ, so mount points and the LabVIEW executable path
+    # cannot be shared. Empty means "infer from the image tag".
+    platform: str = ""  # "" | "windows" | "linux"
 
     def __post_init__(self) -> None:
         if self.runner not in ("mock", "container"):
             raise ConfigError(f"labview.runner must be 'mock' or 'container', got {self.runner!r}")
+        if not self.platform:
+            self.platform = self.platform_from_image(self.image)
+        if self.platform not in ("windows", "linux"):
+            raise ConfigError(
+                f"labview.platform must be 'windows' or 'linux', got {self.platform!r}"
+            )
+
+    @staticmethod
+    def platform_from_image(image: str) -> str:
+        """Infer the container platform from an NI image reference.
+
+        NI tags encode the platform (``2026q1-windows`` / ``latest-linux``), so a
+        single ``image`` setting is enough for the common case.
+        """
+
+        tag = image.rsplit(":", 1)[-1] if ":" in image else ""
+        return "windows" if "windows" in tag.lower() else "linux"
 
 
 @dataclass
@@ -123,6 +144,7 @@ def parse_config(raw: dict) -> Config:
         runner=lv.get("runner", "mock"),
         image=lv.get("image", "nationalinstruments/labview:2026q1-linux"),
         headless=bool(lv.get("headless", True)),
+        platform=lv.get("platform", "") or "",
     )
 
     caps = _as_dict(raw.get("capabilities"), "capabilities")

@@ -47,9 +47,3 @@ def test_cli_run_dry_run_status(sample_repo, tmp_path):
     )
     assert result.exit_code == 0
     assert "dry-run" in result.output
-
-
-def test_cli_mirror_dry_run():
-    result = CliRunner().invoke(main, ["mirror", "origin", "https://github.com/o/r.git"])
-    assert result.exit_code == 0
-    assert "would run" in result.output

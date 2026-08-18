@@ -10,7 +10,6 @@ import click
 from fscicd import __version__
 from fscicd.bitbucket import BitbucketClient
 from fscicd.config import ConfigError, load_config
-from fscicd.mirror import mirror as run_mirror
 from fscicd.models import Status
 from fscicd.pipeline import run_pipeline
 from fscicd.report import write_reports
@@ -70,19 +69,6 @@ def run(config_path, repo_path, commit, report_url, no_status):
 
     if result.status is Status.FAILED:
         sys.exit(_EXIT_FAILURE)
-
-
-@main.command()
-@click.argument("source_remote")
-@click.argument("target_remote")
-@click.option("--execute", is_flag=True, help="Actually run the git commands (default: dry-run).")
-def mirror(source_remote, target_remote, execute):
-    """Mirror a Bitbucket remote into a GitHub remote (Option B)."""
-
-    cmds = run_mirror(source_remote, target_remote, dry_run=not execute)
-    for cmd in cmds:
-        prefix = "run" if execute else "would run"
-        click.echo(f"{prefix}: {' '.join(cmd)}")
 
 
 if __name__ == "__main__":  # pragma: no cover

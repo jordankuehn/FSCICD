@@ -1,0 +1,13 @@
+---
+# Line length matches the Python line-length in pyproject.toml so the CI
+# configs and the package share one convention.
+extends: default
+
+rules:
+  line-length:
+    max: 100
+  # GitHub Actions and Bitbucket Pipelines both use `on:` / boolean-looking
+  # keys that yamllint's truthy rule flags by default.
+  truthy:
+    allowed-values: ["true", "false"]
+    check-keys: false

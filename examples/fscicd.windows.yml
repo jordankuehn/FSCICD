@@ -1,0 +1,45 @@
+---
+# FSCICD configuration for a real run in the NI *Windows* LabVIEW container.
+#
+# Use this on a self-hosted Bitbucket Windows runner with Docker Desktop in
+# Windows-container mode. `examples/fscicd.yml` is the mock-runner counterpart
+# used for local development and cloud (Linux) steps.
+
+project:
+  name: Signal Generator (Windows container)
+  # Credentials come from the environment, never from this file:
+  #   BITBUCKET_USERNAME + BITBUCKET_APP_PASSWORD, or BITBUCKET_ACCESS_TOKEN
+  bitbucket:
+    workspace: my-workspace
+    repo_slug: signal-generator
+
+labview:
+  version: "2026"
+  runner: container
+  # The platform is inferred from the image tag, so a "-windows" image selects
+  # the Windows mount layout (C:\work, C:\out) and LabVIEW.exe path.
+  image: nationalinstruments/labview:2026q1-windows
+  headless: true
+
+capabilities:
+  # Mass Compile is the first capability wired up for real container runs: it
+  # parses the plain-text LabVIEWCLI log the operation writes.
+  mass_compile:
+    enabled: true
+    project_globs: ["**/*.lvproj"]
+    vi_globs: ["**/*.vi", "**/*.ctl"]
+  # VI Analyzer and Unit Tests still expect machine-readable reports that the
+  # real LabVIEWCLI operations do not emit in this shape. They stay disabled for
+  # container runs until their report parsing is ported (see README roadmap).
+  vi_analyzer:
+    enabled: false
+    config_path: ""
+    fail_on_severity: high
+  unit_tests:
+    enabled: false
+    frameworks: ["caraya"]
+    test_globs: ["**/*Test*.vi", "**/Tests/**/*.vi"]
+    fail_on_failures: true
+
+report:
+  output_dir: build/reports

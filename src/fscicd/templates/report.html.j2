@@ -56,7 +56,7 @@
       {% for vi in cap.details.vis %}
       <tr>
         <td><code>{{ vi.path }}</code></td>
-        <td>{{ "OK" if vi.ok else "BROKEN" }}</td>
+        <td>{% if vi.ok %}OK{% elif vi.broken %}BROKEN{% else %}MISSING DEPENDENCY{% endif %}</td>
         <td>{{ vi.message }}{% if vi.missing_dependencies %} (missing: {{ vi.missing_dependencies | join(", ") }}){% endif %}</td>
       </tr>
       {% endfor %}

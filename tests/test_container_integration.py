@@ -23,18 +23,24 @@ from fscicd.pipeline import run_pipeline
 
 WINDOWS_IMAGE = "nationalinstruments/labview:2026q1-windows"
 
-# A Windows MassCompile log: one VI LabVIEW could not load, and one unresolved
-# subVI attributed to its caller.
+# Shaped after a real log captured from the NI Windows container (see
+# tests/fixtures/masscompile_windows_2026.log): one file errors, one compiles,
+# the rest are skipped, and the operation still reports success.
 CONTAINER_LOG = (
-    "LabVIEWCLI started logging in file: "
-    "C:\\Users\\ContainerAdministrator\\AppData\\Local\\Temp\\lv.log\r\n"
-    "Operation: MassCompile\r\n"
-    "Compiling directory C:\\work\r\n"
-    '### Bad VI: "Broken Acquisition.vi"\r\n'
-    'Path="C:\\work\\Signal Generator\\Broken Acquisition.vi"\r\n'
-    'Search failed to find "Missing Helper.vi"\r\n'
-    'Caller: "C:\\work\\Utilities\\Loader.vi"\r\n'
-    "Mass Compile finished with 2 bad VIs.\r\n"
+    'Using LabVIEW: "C:\\Program Files\\National Instruments\\LabVIEW 2026\\LabVIEW.exe"\r\n'
+    "LabVIEW launched successfully.\r\n"
+    "Connection established with LabVIEW at port number 3363.\r\n"
+    "\r\n"
+    "Operation output: \r\n"
+    "#### Starting Mass Compile: Tue, Aug 18, 2026 10:25:41 AM\r\n"
+    '  Directory: "C:\\work"\r\n'
+    "CompileFile: error 74 at C:\\work\\Signal Generator\\Broken Acquisition.vi\r\n"
+    "CompileFile: compiling C:\\work\\Signal Generator\\Generate Sine.vi\r\n"
+    "CompileFile: skipping C:\\work\\Utilities\\Loader.vi\r\n"
+    "CompileFile: skipping C:\\work\\Utilities\\Clamp.vi\r\n"
+    "#### Finished Mass Compile: Tue, Aug 18, 2026 10:25:41 AM\r\n"
+    "\r\n"
+    "MassCompile operation succeeded.\r\n"
 )
 
 
@@ -100,12 +106,14 @@ def test_windows_mass_compile_parses_container_log(monkeypatch, labview_repo):
 
     assert result.status is Status.FAILED
     assert result.total == 4
-    assert result.broken == 2
-    assert result.compiled == 2
+    assert result.broken == 1
+    assert result.skipped == 2
+    assert result.compiled == 1
 
-    by_path = {vi.path: vi for vi in result.vis}
-    assert by_path["Signal Generator/Broken Acquisition.vi"].broken is True
-    assert by_path["Utilities/Loader.vi"].missing_dependencies == ["Missing Helper.vi"]
+    problem = result.vis[0]
+    assert problem.path == "Signal Generator/Broken Acquisition.vi"
+    assert problem.broken is True
+    assert "error 74" in problem.message
 
 
 def test_clean_container_run_passes(monkeypatch, labview_repo):
@@ -135,7 +143,10 @@ def test_capability_summarises_container_result(monkeypatch, labview_repo):
     capability = run_mass_compile(runner, MassCompileConfig())
 
     assert capability.status is Status.FAILED
-    assert capability.summary == "2 of 4 VIs broken."
+    # The summary has to state what was actually compiled: LabVIEW skipping
+    # everything otherwise reads the same as a clean build.
+    assert capability.summary == "1 of 4 files failed to compile (1 compiled, 2 skipped)."
+    assert capability.details["skipped"] == 2
 
 
 def test_pipeline_and_report_over_container_runner(monkeypatch, labview_repo, tmp_path):
@@ -166,4 +177,5 @@ def test_pipeline_and_report_over_container_runner(monkeypatch, labview_repo, tm
     paths = write_reports(result, tmp_path / "reports")
     html = paths["html"].read_text()
     assert "Broken Acquisition.vi" in html
-    assert "Missing Helper.vi" in html
+    assert "error 74" in html
+    assert "2 skipped" in html

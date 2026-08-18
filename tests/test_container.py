@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -11,6 +12,7 @@ from fscicd.labview.container import (
     parse_junit_report,
     parse_masscompile_log,
     parse_vianalyzer_report,
+    read_masscompile_log,
 )
 from fscicd.models import Status
 
@@ -111,6 +113,87 @@ def test_parse_junit_report(tmp_path):
     assert result.passed == 1
     assert result.failed == 1
     assert result.skipped == 1
+
+
+REAL_LOG = Path(__file__).parent / "fixtures" / "masscompile_windows_2026.log"
+
+
+def test_parse_real_windows_2026_log():
+    """A captured log from the NI Windows container: 1 error, everything skipped.
+
+    LabVIEW reports "MassCompile operation succeeded" here even though it errored
+    on the project and compiled nothing, so a parser that trusts the operation
+    verdict (or finds no markers) reports a false green.
+    """
+
+    result = parse_masscompile_log(REAL_LOG, exit_code=0, total_vis=12)
+
+    assert result.status is Status.FAILED
+    assert result.total == 13
+    assert result.compiled == 0
+    assert result.skipped == 12
+    assert result.broken == 1
+
+    problem = result.vis[0]
+    assert problem.path == "Signal Generator.lvproj"
+    assert problem.broken is True
+    assert "error 74" in problem.message
+
+
+def test_real_log_is_ascii_not_utf16():
+    """Guards the encoding sniffing: this log has no BOM and no NULs."""
+
+    raw = REAL_LOG.read_bytes()
+    assert not raw.startswith((b"\xff\xfe", b"\xfe\xff"))
+    assert b"\x00" not in raw
+    assert "CompileFile:" in read_masscompile_log(REAL_LOG)
+
+
+def test_compile_verbs_are_counted_separately(tmp_path):
+    log = tmp_path / "mass_compile.log"
+    log.write_text(
+        "#### Starting Mass Compile: Tue, Aug 18, 2026 10:25:41 AM\r\n"
+        '  Directory: "C:\\work"\r\n'
+        "CompileFile: compiling C:\\work\\A.vi\r\n"
+        "CompileFile: skipping C:\\work\\B.vi\r\n"
+        "CompileFile: error 6 at C:\\work\\C.vi\r\n"
+        "#### Finished Mass Compile: Tue, Aug 18, 2026 10:25:41 AM\r\n"
+        "MassCompile operation succeeded.\r\n"
+    )
+    result = parse_masscompile_log(log)
+    assert (result.total, result.compiled, result.skipped, result.broken) == (3, 1, 1, 1)
+    assert result.status is Status.FAILED
+
+
+def test_all_skipped_is_not_a_failure(tmp_path):
+    """LabVIEW does not say why it skipped, so a skip alone cannot fail the gate."""
+
+    log = tmp_path / "mass_compile.log"
+    log.write_text(
+        "CompileFile: skipping C:\\work\\A.vi\r\n"
+        "CompileFile: skipping C:\\work\\B.vi\r\n"
+        "MassCompile operation succeeded.\r\n"
+    )
+    result = parse_masscompile_log(log)
+    assert result.status is Status.PASSED
+    assert (result.total, result.compiled, result.skipped) == (2, 0, 2)
+
+
+def test_operation_failed_verdict_fails_the_run(tmp_path):
+    log = tmp_path / "mass_compile.log"
+    log.write_text("CompileFile: compiling C:\\work\\A.vi\r\nMassCompile operation failed.\r\n")
+    assert parse_masscompile_log(log).status is Status.FAILED
+
+
+def test_banner_lines_are_not_mistaken_for_bad_vi_markers(tmp_path):
+    log = tmp_path / "mass_compile.log"
+    log.write_text(
+        "#### Starting Mass Compile: Tue, Aug 18, 2026 10:25:41 AM\r\n"
+        "#### Finished Mass Compile: Tue, Aug 18, 2026 10:25:41 AM\r\n"
+    )
+    result = parse_masscompile_log(log, total_vis=4)
+    assert result.vis == []
+    assert result.broken == 0
 
 
 CLEAN_LOG = """LabVIEWCLI started logging in file: C:\\Temp\\lv.log

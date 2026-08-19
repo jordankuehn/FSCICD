@@ -82,15 +82,25 @@ Key packages:
   does not say why it skipped, so an already-current VI and an unreadable one look
   identical — but compiled/skipped counts are always reported so "skipped
   everything" cannot masquerade as "compiled cleanly".
-- VI Analyzer and Unit Tests still parse report shapes the real operations do not
-  emit, so they are disabled in `examples/fscicd.windows.yml` until ported. Treat
-  any capability's parser as unproven until a real log is captured as a fixture.
+- **Unit tests cannot run in the stock NI image at all.** `RunUnitTests` fails
+  there with `-350053` ("missing or bad files") because the UTF JUnit Report
+  library is absent, and Caraya and VI Tester are VIPM packages rather than CLI
+  operations — so one `-TestFramework` flag was never going to drive all three.
+  Enabling this capability requires a worker image with those packages baked in
+  via VIPM, which FSCICD does not build. `ContainerRunner.unit_tests()` raises
+  with that explanation; `parse_junit_report()` is kept because the UTF JUnit
+  library does emit JUnit XML once installed.
 - **VI Analyzer cannot run without a `.viancfg`.** `RunVIAnalyzer` fails with
   `-350050` unless `-ConfigPath` names a VI Analyzer configuration, and one can
   only be authored in the LabVIEW IDE — FSCICD cannot synthesise it. The runner
   discovers the shallowest `.viancfg` in the checkout, or raises with that
-  explanation. Its `-ReportPath` / `-ReportType JSON` arguments are still
-  unverified guesses.
+  explanation. A `.viancfg` also carries statically mapped target paths from the
+  machine that authored it, which do not exist under the container's `C:\work`
+  mount, so a committed config needs its targeting rewritten at run time.
+- VI Analyzer still parses a report shape the real operation may not emit
+  (`-ReportPath` / `-ReportType JSON` are unverified), so it is disabled in
+  `examples/fscicd.windows.yml` until proven. Treat any capability's parser as
+  unproven until a real log is captured as a fixture.
 - **Per-operation `-Help` does not work** in this container: `LabVIEWCLI
   -OperationName <op> -Headless -Help` ignores `-Help` and attempts the
   operation, so required arguments are discovered from its `-350050` errors one

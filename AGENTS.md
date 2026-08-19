@@ -85,6 +85,17 @@ Key packages:
 - VI Analyzer and Unit Tests still parse report shapes the real operations do not
   emit, so they are disabled in `examples/fscicd.windows.yml` until ported. Treat
   any capability's parser as unproven until a real log is captured as a fixture.
+- **VI Analyzer cannot run without a `.viancfg`.** `RunVIAnalyzer` fails with
+  `-350050` unless `-ConfigPath` names a VI Analyzer configuration, and one can
+  only be authored in the LabVIEW IDE — FSCICD cannot synthesise it. The runner
+  discovers the shallowest `.viancfg` in the checkout, or raises with that
+  explanation. Its `-ReportPath` / `-ReportType JSON` arguments are still
+  unverified guesses.
+- **Per-operation `-Help` does not work** in this container: `LabVIEWCLI
+  -OperationName <op> -Headless -Help` ignores `-Help` and attempts the
+  operation, so required arguments are discovered from its `-350050` errors one
+  at a time. Note `-Headless` is required even to reach that point, since
+  operation handling needs a running LabVIEW.
 - **Mock results are deterministic by file path** (seeded from the VI path): a VI
   whose name contains `broken` is reported broken, `missing` yields a missing
   dependency, VI Analyzer findings are stable per path, and a unit-test VI whose

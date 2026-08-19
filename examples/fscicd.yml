@@ -31,7 +31,9 @@ capabilities:
     vi_globs: ["**/*.vi", "**/*.ctl"]
   vi_analyzer:
     enabled: true
-    config_path: ""          # path to a .viancfg; empty uses the worker default
+    # Repo-relative path to a .viancfg; empty discovers the shallowest one in the
+    # checkout. Required for container runs, ignored by the mock runner.
+    config_path: ""
     fail_on_severity: high   # high | medium | low | none
   unit_tests:
     enabled: true

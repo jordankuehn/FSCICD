@@ -41,6 +41,43 @@ def test_vianalyzer_command_uses_config_path(tmp_path):
     assert "-Headless" in cmd
 
 
+def test_vianalyzer_requires_a_viancfg(tmp_path):
+    """LabVIEWCLI rejects RunVIAnalyzer without -ConfigPath (error -350050)."""
+
+    runner = ContainerRunner(LabVIEWConfig(runner="container"), tmp_path)
+    with pytest.raises(ContainerRunnerError) as excinfo:
+        runner.build_vianalyzer_command(tmp_path / "out", "")
+    assert ".viancfg" in str(excinfo.value)
+
+
+def test_vianalyzer_config_discovered_from_the_checkout(tmp_path):
+    (tmp_path / "Analysis").mkdir()
+    (tmp_path / "Analysis" / "deep.viancfg").write_text("stub")
+    (tmp_path / "project.viancfg").write_text("stub")
+
+    runner = ContainerRunner(_windows_config(), tmp_path)
+    cmd = runner.build_vianalyzer_command(tmp_path / "out", "")
+
+    # The shallowest config wins, and it resolves inside the mounted checkout -
+    # not the output directory, which nothing ever writes a config into.
+    assert cmd[cmd.index("-ConfigPath") + 1] == "C:\\work\\project.viancfg"
+
+
+def test_vianalyzer_config_discovery_skips_tooling_dirs(tmp_path):
+    (tmp_path / "build").mkdir()
+    (tmp_path / "build" / "generated.viancfg").write_text("stub")
+
+    runner = ContainerRunner(LabVIEWConfig(runner="container"), tmp_path)
+    with pytest.raises(ContainerRunnerError):
+        runner.build_vianalyzer_command(tmp_path / "out", "")
+
+
+def test_vianalyzer_relative_config_path_is_mapped_into_the_container(tmp_path):
+    runner = ContainerRunner(_windows_config(), tmp_path)
+    cmd = runner.build_vianalyzer_command(tmp_path / "out", "Analysis/checks.viancfg")
+    assert cmd[cmd.index("-ConfigPath") + 1] == "C:\\work\\Analysis\\checks.viancfg"
+
+
 def test_platform_inferred_from_image_tag():
     assert LabVIEWConfig(image=WINDOWS_IMAGE).platform == "windows"
     assert LabVIEWConfig(image="nationalinstruments/labview:2026q1-linux").platform == "linux"
@@ -77,6 +114,7 @@ def test_linux_commands_omit_labview_path(tmp_path):
 
 
 def test_windows_unittest_and_analyzer_paths(tmp_path):
+    (tmp_path / "checks.viancfg").write_text("stub")
     runner = ContainerRunner(_windows_config(), tmp_path)
     unit = runner.build_unittest_command(tmp_path / "out", "caraya")
     assert unit[unit.index("-JUnitReportPath") + 1] == "C:\\out\\unit_tests.xml"

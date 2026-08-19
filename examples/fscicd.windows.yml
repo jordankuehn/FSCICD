@@ -33,6 +33,10 @@ capabilities:
   # container runs until their report parsing is ported (see README roadmap).
   vi_analyzer:
     enabled: false
+    # RunVIAnalyzer will not start without a VI Analyzer configuration
+    # (LabVIEWCLI error -350050), and one can only be authored in the LabVIEW
+    # IDE. Commit a .viancfg and either name it here, repo-relative, or leave
+    # this empty to use the shallowest .viancfg in the checkout.
     config_path: ""
     fail_on_severity: high
   unit_tests:

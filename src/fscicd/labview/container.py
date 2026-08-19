@@ -41,6 +41,10 @@ from fscicd.models import (
 # reportable outcome, not a runner failure, so the log still gets parsed.
 MASSCOMPILE_PARTIAL_EXIT = 3
 
+# Directories that hold tooling or build output rather than project source, and
+# so must not supply a discovered VI Analyzer configuration.
+_NON_PROJECT_DIRS = frozenset({".git", ".venv", ".cursor", "build", "ci-out", "dist"})
+
 
 @dataclass(frozen=True)
 class ContainerPaths:
@@ -121,6 +125,50 @@ class ContainerRunner(LabVIEWRunner):
             cmd.append("-Headless")
         return cmd
 
+    def _in_container(self, repo_relative: str) -> str:
+        """Map a repo-relative path to where the checkout is mounted."""
+
+        paths = self.paths
+        sep = "\\" if "\\" in paths.workdir else "/"
+        cleaned = repo_relative.replace("\\", "/").strip().lstrip("/")
+        return f"{paths.workdir}{sep}{cleaned.replace('/', sep)}"
+
+    def discover_vianalyzer_config(self) -> str | None:
+        """Return the repo-relative path of a committed ``.viancfg``, if any.
+
+        The shallowest wins, so a configuration at the project root takes
+        precedence over one buried in a subdirectory.
+        """
+
+        candidates = []
+        for match in self.repo_path.rglob("*.viancfg"):
+            rel = match.relative_to(self.repo_path)
+            if any(part in _NON_PROJECT_DIRS for part in rel.parts):
+                continue
+            candidates.append(rel)
+        if not candidates:
+            return None
+        candidates.sort(key=lambda rel: (len(rel.parts), str(rel)))
+        return candidates[0].as_posix()
+
+    def _config_path_arg(self, config_path: str) -> str:
+        """Resolve the ``-ConfigPath`` value, which LabVIEWCLI requires."""
+
+        resolved = config_path.strip() or self.discover_vianalyzer_config()
+        if not resolved:
+            raise ContainerRunnerError(
+                "VI Analyzer needs a .viancfg: LabVIEWCLI rejects RunVIAnalyzer "
+                "without -ConfigPath (error -350050). Author a VI Analyzer "
+                "configuration in the LabVIEW IDE, commit it to the repository, and "
+                "either leave capabilities.vi_analyzer.config_path empty to use the "
+                "first .viancfg found in the checkout or point it at a specific one."
+            )
+        # An already-absolute path is assumed to be container-side and passed
+        # through; anything else is relative to the mounted checkout.
+        if resolved.startswith(("/", "C:\\", "c:\\", "C:/", "c:/")):
+            return resolved
+        return self._in_container(resolved)
+
     def build_vianalyzer_command(self, out_dir: Path, config_path: str) -> list[str]:
         """Return the full ``docker run ... LabVIEWCLI`` argv for VI Analyzer."""
 
@@ -131,7 +179,7 @@ class ContainerRunner(LabVIEWRunner):
             "-OperationName",
             "RunVIAnalyzer",
             "-ConfigPath",
-            config_path or paths.out("vi-analyzer.viancfg"),
+            self._config_path_arg(config_path),
             "-ReportPath",
             paths.out("vi_analyzer.json"),
             "-ReportType",

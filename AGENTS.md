@@ -4,12 +4,25 @@ FSCICD is a **CI/CD system for LabVIEW code**. It runs Mass Compile and VI
 Analyzer inside NI's official **headless LabVIEW containers**, renders an
 HTML/JSON report, and posts a **Bitbucket** commit build status.
 
-**Bitbucket is the only home: code of record and CI host.** The Bitbucket →
-GitHub mirror and the GitHub Actions workflow have both been deleted — do not
-reintroduce either. CI is `bitbucket-pipelines.yml`, and real LabVIEW jobs run on
-a **self-hosted Bitbucket Windows runner** (labels `self.hosted`, `windows`,
-`labview`) because Atlassian hosts no Windows runners and the projects target
-Windows.
+**Bitbucket is the code of record and the CI host.** CI is
+`bitbucket-pipelines.yml`, and real LabVIEW jobs run on a **self-hosted Bitbucket
+Windows runner** (labels `self.hosted`, `windows`, `labview`) because Atlassian
+hosts no Windows runners and the projects target Windows. The old Bitbucket →
+GitHub mirror and the GitHub Actions workflow are both deleted — do not
+reintroduce either.
+
+**But cloud agents currently work on the GitHub copy** at
+`github.com/jordankuehn/FSCICD`, because connecting Cursor to Bitbucket Cloud
+fails on a known bug in that integration (OAuth is granted on the Bitbucket side
+but Cursor never reaches the "Connected" state). So:
+
+- Push branches and open pull requests on **GitHub**, as normal.
+- The owner replays merged `main` onto Bitbucket by hand
+  (`git pull github main` then `git push origin main` in a clone where `origin`
+  is Bitbucket). Nothing automated does this, and **CI does not run on GitHub**,
+  so a change is untested by Pipelines until that replay happens.
+- Do not re-add a mirror or a GitHub Actions workflow to paper over this; it is a
+  temporary workaround for an upstream bug, not the intended architecture.
 
 Key packages:
 - `src/fscicd/` — Python package. Entry point CLI is `fscicd` (see `cli.py`).
@@ -24,8 +37,8 @@ Key packages:
 
 - **The environment is defined in `.cursor/environment.json`**, which Cursor
   resolves ahead of any saved dashboard environment. A clean checkout plus that
-  one install command is enough, so an agent started against the Bitbucket
-  repository needs no dashboard setup.
+  one install command is enough, so an agent needs no dashboard setup whichever
+  remote it is started from.
 - **Python dev env lives in `.venv`.** After the update script runs, use
   `.venv/bin/<tool>` (e.g. `.venv/bin/pytest`, `.venv/bin/ruff`) or activate the
   venv. The package is installed editable, so `src/fscicd` edits take effect

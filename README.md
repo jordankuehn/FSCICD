@@ -161,13 +161,25 @@ LabVIEW backend, enabled capabilities, and reporting.
 
 | Capability | `mock` runner | `container` runner |
 |---|---|---|
-| Mass Compile | Implemented | Implemented (parses the `LabVIEWCLI` log) |
-| VI Analyzer | Implemented | Command built; report parsing not ported yet |
-| Unit Tests | Implemented | Command built; report parsing not ported yet |
+| Mass Compile | Implemented | **Working** — verified against a real container log |
+| VI Analyzer | Implemented | Invocation correct; report parsing unproven |
+| Unit Tests | Implemented | **Blocked** — needs a custom worker image |
 
-VI Analyzer and Unit Tests are therefore disabled in
-[`examples/fscicd.windows.yml`](examples/fscicd.windows.yml): their parsers still
-expect machine-readable reports that the real operations do not emit in that
-shape. Porting them (from the native VI Analyzer HTML report and the per-framework
-unit-test runners) is the next step, followed by VIDiff, VI Browser, Antidoc, and
-an aggregated multi-commit dashboard.
+Both are disabled in
+[`examples/fscicd.windows.yml`](examples/fscicd.windows.yml), for different
+reasons.
+
+**VI Analyzer** needs a `.viancfg`, which selects the tests to run and can only be
+authored in the LabVIEW IDE — `RunVIAnalyzer` refuses to start without one
+(`-350050`). FSCICD discovers a committed configuration, but its report arguments
+have not been exercised against a real run yet.
+
+**Unit Tests** cannot run in the stock NI image: `RunUnitTests` fails with
+`-350053` because the UTF JUnit Report library is absent, and Caraya and VI Tester
+are VIPM packages rather than CLI operations. This needs a worker image with those
+packages baked in via VIPM — the reason
+[`docker/labview-worker.Dockerfile`](docker/labview-worker.Dockerfile) exists,
+though it currently only extends the Linux image and installs nothing.
+
+Roadmap after those: VIDiff, VI Browser, Antidoc, and an aggregated multi-commit
+dashboard.

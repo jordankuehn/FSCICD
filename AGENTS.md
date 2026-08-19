@@ -82,9 +82,17 @@ Key packages:
   does not say why it skipped, so an already-current VI and an unreadable one look
   identical — but compiled/skipped counts are always reported so "skipped
   everything" cannot masquerade as "compiled cleanly".
-- VI Analyzer and Unit Tests still parse report shapes the real operations do not
-  emit, so they are disabled in `examples/fscicd.windows.yml` until ported. Treat
-  any capability's parser as unproven until a real log is captured as a fixture.
+- **Unit tests cannot run in the stock NI image at all.** `RunUnitTests` fails
+  there with `-350053` ("missing or bad files") because the UTF JUnit Report
+  library is absent, and Caraya and VI Tester are VIPM packages rather than CLI
+  operations — so one `-TestFramework` flag was never going to drive all three.
+  Enabling this capability requires a worker image with those packages baked in
+  via VIPM, which FSCICD does not build. `ContainerRunner.unit_tests()` raises
+  with that explanation; `parse_junit_report()` is kept because the UTF JUnit
+  library does emit JUnit XML once installed.
+- VI Analyzer still parses a report shape the real operation may not emit, so it
+  is disabled in `examples/fscicd.windows.yml` until proven. Treat any
+  capability's parser as unproven until a real log is captured as a fixture.
 - **Mock results are deterministic by file path** (seeded from the VI path): a VI
   whose name contains `broken` is reported broken, `missing` yields a missing
   dependency, VI Analyzer findings are stable per path, and a unit-test VI whose

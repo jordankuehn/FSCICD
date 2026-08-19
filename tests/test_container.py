@@ -76,22 +76,22 @@ def test_linux_commands_omit_labview_path(tmp_path):
     assert cmd[cmd.index("-LogFilePath") + 1] == "/out/mass_compile.log"
 
 
-def test_windows_unittest_and_analyzer_paths(tmp_path):
+def test_windows_analyzer_report_path(tmp_path):
+    (tmp_path / "checks.viancfg").write_text("stub")
     runner = ContainerRunner(_windows_config(), tmp_path)
-    unit = runner.build_unittest_command(tmp_path / "out", "caraya")
-    assert unit[unit.index("-JUnitReportPath") + 1] == "C:\\out\\unit_tests.xml"
-    assert unit[unit.index("-ProjectPath") + 1] == "C:\\work"
     analyzer = runner.build_vianalyzer_command(tmp_path / "out", "")
     assert analyzer[analyzer.index("-ReportPath") + 1] == "C:\\out\\vi_analyzer.json"
 
 
-def test_unittest_command_is_headless(tmp_path):
+def test_unit_tests_refuse_to_run_in_the_stock_image(tmp_path):
+    """RunUnitTests fails with -350053 there: the UTF JUnit library is absent."""
+
     runner = ContainerRunner(LabVIEWConfig(runner="container"), tmp_path)
-    cmd = runner.build_unittest_command(tmp_path / "out", "caraya")
-    assert "RunUnitTests" in cmd
-    assert "caraya" in cmd
-    assert "-Headless" in cmd
-    assert any("unit_tests.xml" in part for part in cmd)
+    with pytest.raises(ContainerRunnerError) as excinfo:
+        runner.unit_tests(["**/*Test*.vi"], ["caraya"])
+    message = str(excinfo.value)
+    assert "-350053" in message
+    assert "VIPM" in message
 
 
 def test_parse_junit_report(tmp_path):

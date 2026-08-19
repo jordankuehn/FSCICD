@@ -142,31 +142,6 @@ class ContainerRunner(LabVIEWRunner):
             cmd.append("-Headless")
         return cmd
 
-    def build_unittest_command(self, out_dir: Path, framework: str) -> list[str]:
-        """Return the full ``docker run ... LabVIEWCLI`` argv for unit tests.
-
-        Uses the RunUnitTests operation, which drives the configured framework
-        (Caraya / VI Tester / NI UTF) headlessly and emits a JUnit XML report.
-        """
-
-        paths = self.paths
-        cmd = self._base_docker_args(out_dir)
-        cmd += [
-            "LabVIEWCLI",
-            "-OperationName",
-            "RunUnitTests",
-            "-TestFramework",
-            framework,
-            "-ProjectPath",
-            paths.workdir,
-            "-JUnitReportPath",
-            paths.out("unit_tests.xml"),
-        ]
-        cmd += self._labview_path_args()
-        if self.config.headless:
-            cmd.append("-Headless")
-        return cmd
-
     def _run(self, argv: list[str], ok_codes: tuple[int, ...] = (0,)) -> int:
         if shutil.which("docker") is None:
             raise ContainerRunnerError(
@@ -203,10 +178,15 @@ class ContainerRunner(LabVIEWRunner):
         return parse_vianalyzer_report(out_dir / "vi_analyzer.json")
 
     def unit_tests(self, test_globs: list[str], frameworks: list[str]) -> UnitTestResult:
-        out_dir = self._out_dir()
-        framework = frameworks[0] if frameworks else "caraya"
-        self._run(self.build_unittest_command(out_dir, framework))
-        return parse_junit_report(out_dir / "unit_tests.xml", framework)
+        raise ContainerRunnerError(
+            "Unit tests cannot run in the stock NI LabVIEW image. LabVIEWCLI's "
+            "RunUnitTests operation fails with -350053 there because the UTF "
+            "JUnit Report library is not installed, and Caraya and VI Tester are "
+            "VIPM packages rather than CLI operations. Running them needs a worker "
+            "image with those packages baked in via VIPM, which FSCICD does not "
+            "build yet; keep capabilities.unit_tests disabled for container runs "
+            "and use runner: mock for development."
+        )
 
 
 # LabVIEW 2026 reports one line per file it considered, e.g.

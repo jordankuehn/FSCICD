@@ -15,7 +15,7 @@ from fscicd.labview.container import (
 )
 from fscicd.models import Status
 
-WINDOWS_IMAGE = "nationalinstruments/labview:2026q1-windows"
+WINDOWS_IMAGE = "nationalinstruments/labview:2026q3-windows"
 
 
 def _windows_config() -> LabVIEWConfig:
@@ -79,7 +79,7 @@ def test_vianalyzer_relative_config_path_is_mapped_into_the_container(tmp_path):
 
 def test_platform_inferred_from_image_tag():
     assert LabVIEWConfig(image=WINDOWS_IMAGE).platform == "windows"
-    assert LabVIEWConfig(image="nationalinstruments/labview:2026q1-linux").platform == "linux"
+    assert LabVIEWConfig(image="nationalinstruments/labview:2026q3-linux").platform == "linux"
     assert LabVIEWConfig(image="nationalinstruments/labview:latest-windows").platform == "windows"
 
 

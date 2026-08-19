@@ -57,6 +57,12 @@ Key packages:
   or 32-bit — do not add version/bitness branching. Headless mode (`-Headless` /
   `LV_RTE_HEADLESS=1`) skips license activation for CI, so no license server needs
   to be reachable from the runner.
+- **The image quarter must match the LabVIEW the VIs were saved in.** The projects
+  are on **2026 Q3**, so the configs pin `nationalinstruments/labview:2026q3-*`.
+  LabVIEW will not load VIs saved by a newer build, so running a `2026q1` image
+  against a Q3 codebase reports breakage that has nothing to do with the code. The
+  quarter is a deployment detail, not the version/bitness branching ruled out
+  above.
 - **Container platform (Windows vs Linux) *is* branched**, unlike version/bitness:
   NI's two image families have different mount layouts, so `labview.platform`
   (inferred from the image tag) selects `C:\work`/`C:\out` + an explicit

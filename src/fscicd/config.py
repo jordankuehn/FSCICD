@@ -32,7 +32,7 @@ class LabVIEWConfig:
     # older versions or 32-bit, so these are fixed rather than configurable.
     version: str = "2026"
     runner: str = "mock"  # "mock" | "container"
-    image: str = "nationalinstruments/labview:2026q1-linux"
+    image: str = "nationalinstruments/labview:2026q3-linux"
     headless: bool = True
     # Container platform. NI publishes Windows and Linux LabVIEW images whose
     # filesystem layouts differ, so mount points and the LabVIEW executable path
@@ -53,7 +53,7 @@ class LabVIEWConfig:
     def platform_from_image(image: str) -> str:
         """Infer the container platform from an NI image reference.
 
-        NI tags encode the platform (``2026q1-windows`` / ``latest-linux``), so a
+        NI tags encode the platform (``2026q3-windows`` / ``latest-linux``), so a
         single ``image`` setting is enough for the common case.
         """
 
@@ -142,7 +142,7 @@ def parse_config(raw: dict) -> Config:
     labview = LabVIEWConfig(
         version=str(lv.get("version", "2026")),
         runner=lv.get("runner", "mock"),
-        image=lv.get("image", "nationalinstruments/labview:2026q1-linux"),
+        image=lv.get("image", "nationalinstruments/labview:2026q3-linux"),
         headless=bool(lv.get("headless", True)),
         platform=lv.get("platform", "") or "",
     )

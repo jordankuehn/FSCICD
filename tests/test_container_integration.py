@@ -21,7 +21,7 @@ from fscicd.labview.container import ContainerRunner, ContainerRunnerError
 from fscicd.models import Status
 from fscicd.pipeline import run_pipeline
 
-WINDOWS_IMAGE = "nationalinstruments/labview:2026q1-windows"
+WINDOWS_IMAGE = "nationalinstruments/labview:2026q3-windows"
 
 # Shaped after a real log captured from the NI Windows container (see
 # tests/fixtures/masscompile_windows_2026.log): one file errors, one compiles,

@@ -18,7 +18,7 @@ labview:
   runner: container
   # The platform is inferred from the image tag, so a "-windows" image selects
   # the Windows mount layout (C:\work, C:\out) and LabVIEW.exe path.
-  image: nationalinstruments/labview:2026q1-windows
+  image: nationalinstruments/labview:2026q3-windows
   headless: true
 
 capabilities:

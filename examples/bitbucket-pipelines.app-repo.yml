@@ -15,7 +15,7 @@
 #    Registering a runner is not enough; Pipelines is a per-repo switch.
 #
 # 3. On the runner host: Docker Desktop in Windows-container mode, plus
-#    `docker pull nationalinstruments/labview:2026q1-windows`, and Python 3.10+
+#    `docker pull nationalinstruments/labview:2026q3-windows`, and Python 3.10+
 #    on PATH.
 #
 # 4. Commit an `fscicd.yml` to this repo (see examples/fscicd.windows.yml).

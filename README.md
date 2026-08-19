@@ -162,17 +162,20 @@ LabVIEW backend, enabled capabilities, and reporting.
 | Capability | `mock` runner | `container` runner |
 |---|---|---|
 | Mass Compile | Implemented | **Working** — verified against a real container log |
-| VI Analyzer | Implemented | Invocation correct; report parsing unproven |
+| VI Analyzer | Implemented | **Working** — verified against a real container report |
 | Unit Tests | Implemented | **Blocked** — needs a custom worker image |
-
-Both are disabled in
-[`examples/fscicd.windows.yml`](examples/fscicd.windows.yml), for different
-reasons.
 
 **VI Analyzer** needs a `.viancfg`, which selects the tests to run and can only be
 authored in the LabVIEW IDE — `RunVIAnalyzer` refuses to start without one
-(`-350050`). FSCICD discovers a committed configuration, but its report arguments
-have not been exercised against a real run yet.
+(`-350050`). FSCICD discovers a committed configuration and parses the operation's
+report. It stays disabled in
+[`examples/fscicd.windows.yml`](examples/fscicd.windows.yml) only because the
+sample project ships no configuration and its VIs are stubs.
+
+Note that a project whose dependencies are absent from the image will report
+almost every VI as broken, since LabVIEW cannot resolve their subVIs. Meaningful
+analysis of a real project therefore wants those dependencies installed too — the
+same requirement unit tests have.
 
 **Unit Tests** cannot run in the stock NI image: `RunUnitTests` fails with
 `-350053` because the UTF JUnit Report library is absent, and Caraya and VI Tester

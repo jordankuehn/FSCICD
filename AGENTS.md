@@ -97,10 +97,22 @@ Key packages:
   explanation. A `.viancfg` also carries statically mapped target paths from the
   machine that authored it, which do not exist under the container's `C:\work`
   mount, so a committed config needs its targeting rewritten at run time.
-- VI Analyzer still parses a report shape the real operation may not emit
-  (`-ReportPath` / `-ReportType JSON` are unverified), so it is disabled in
-  `examples/fscicd.windows.yml` until proven. Treat any capability's parser as
-  unproven until a real log is captured as a fixture.
+- **The VI Analyzer report is tab-separated plain text**, whatever extension
+  `-ReportPath` is given — not HTML and not JSON. `-ReportPath` is required, a
+  format argument is not, and `RunVIAnalyzer` exits **3** when analysis completed
+  but tests failed, exactly like MassCompile. See the captured
+  `tests/fixtures/vi_analyzer_report_windows_2026.txt`. VI Analyzer reports no
+  severity of its own, so `parse_vianalyzer_report()` imposes one; only
+  `Broken VI` is classified from observed output and everything else defaults to
+  medium, which at the default `fail_on_severity: high` means unclassified
+  findings are reported without failing the pipeline.
+- **A `.viancfg`'s `<Path>"."</Path>` resolves relative to the config file's own
+  directory**, not the mount root or the working directory. Values in that XML
+  are quoted inside the element and backslashes are doubled
+  (`<RelativePath>"project\\_VI Analyzer\\..."</RelativePath>`), so any rewrite
+  must match that. Scope therefore follows wherever the config is committed,
+  which is why a shared default config would need its targeting rewritten per
+  run.
 - **Per-operation `-Help` does not work** in this container: `LabVIEWCLI
   -OperationName <op> -Headless -Help` ignores `-Help` and attempts the
   operation, so required arguments are discovered from its `-350050` errors one

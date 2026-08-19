@@ -1,0 +1,36 @@
+VI Analyzer Results
+
+Original Analysis Performed	Wednesday, August 19, 2026 2:49:11 PM
+Total Analysis Time	00:21:41.09
+
+Results
+VIs Analyzed	1642
+Total Tests Run	1642
+Passed Tests	207
+Failed Tests	1435
+Skipped Tests	0
+
+Errors
+VI not loadable	0
+Test not loadable	0
+Test not runnable	0
+Test error out	0
+
+Failed Tests (sorted by VI)
+
+Do.vi (C:\work\_Code\Well\Well Messages\Write Tares Msg\Do.vi)
+Broken VI	This VI is broken.
+
+Send Write Tares.vi (C:\work\_Code\Well\Well Messages\Write Tares Msg\Send Write Tares.vi)
+Broken VI	This VI is broken.
+
+Do.vi (C:\work\_Code\Well\Well Messages\Write Status Msg\Do.vi)
+Broken VI	This VI is broken.
+
+Send Write Status.vi (C:\work\_Code\Well\Well Messages\Write Status Msg\Send Write Status.vi)
+Broken VI	This VI is broken.
+
+Testing Errors
+
+(none)
+

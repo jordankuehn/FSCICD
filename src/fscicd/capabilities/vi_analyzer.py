@@ -30,6 +30,13 @@ def run_vi_analyzer(runner: LabVIEWRunner, config: ViAnalyzerConfig) -> Capabili
             f"medium={result.count_by_severity('medium')}, "
             f"low={result.count_by_severity('low')})."
         )
+        # Only the container backend reports per-test counts; the mock does not.
+        if result.tests_run:
+            summary += f" {result.passed_tests} tests passed, {result.failed_tests} failed."
+        if result.unloadable_vis:
+            # Usually means the environment, not the code: VIs whose dependencies
+            # are absent from the image cannot be analyzed meaningfully.
+            summary += f" {result.unloadable_vis} VIs were unloadable."
 
     return CapabilityResult(
         name="VI Analyzer",
@@ -37,6 +44,10 @@ def run_vi_analyzer(runner: LabVIEWRunner, config: ViAnalyzerConfig) -> Capabili
         summary=summary,
         details={
             "tested_vis": result.tested_vis,
+            "tests_run": result.tests_run,
+            "passed_tests": result.passed_tests,
+            "failed_tests": result.failed_tests,
+            "unloadable_vis": result.unloadable_vis,
             "fail_on_severity": config.fail_on_severity,
             "findings": [vars(f) for f in result.findings],
         },

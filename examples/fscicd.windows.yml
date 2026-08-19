@@ -28,15 +28,17 @@ capabilities:
     enabled: true
     project_globs: ["**/*.lvproj"]
     vi_globs: ["**/*.vi", "**/*.ctl"]
-  # VI Analyzer and Unit Tests still expect machine-readable reports that the
-  # real LabVIEWCLI operations do not emit in this shape. They stay disabled for
-  # container runs until their report parsing is ported (see README roadmap).
+  # VI Analyzer works against a real container, but stays off here because the
+  # sample project ships no .viancfg and its VIs are stubs. Enable it in a real
+  # project that has one.
   vi_analyzer:
     enabled: false
     # RunVIAnalyzer will not start without a VI Analyzer configuration
     # (LabVIEWCLI error -350050), and one can only be authored in the LabVIEW
     # IDE. Commit a .viancfg and either name it here, repo-relative, or leave
-    # this empty to use the shallowest .viancfg in the checkout.
+    # this empty to use the shallowest .viancfg in the checkout. Its own
+    # <Path>"."</Path> is resolved relative to the config file's directory, so
+    # where it is committed determines what gets analyzed.
     config_path: ""
     fail_on_severity: high
   unit_tests:

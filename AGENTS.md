@@ -123,6 +123,14 @@ Key packages:
   is bounded by `labview.timeout_minutes` (default 120). Killing the docker client
   does not stop the container, so each run is given a `--name` and force-removed
   on timeout.
+- **Copying a developer machine's LabVIEW directories into the container does not
+  supply a project's VIPM dependencies.** Measured against FS iControl (1642 VIs,
+  148 packages): no mounts 207 passing, mounting `vi.lib`/`user.lib`/`instr.lib`
+  255, additionally mounting `resource`/`project`/`menus` **217** — the extra
+  directories regressed 38 VIs by shadowing the container's own install. 15.5% is
+  the ceiling, so whatever the remaining VIs need is not a LabVIEW directory.
+  Do not re-run this experiment; extend it only with evidence from the project's
+  own dependency list.
 - **Mass Compile hangs on a project whose dependencies are missing; VI Analyzer
   does not.** Against a 1642-VI project needing 148 absent VIPM packages,
   MassCompile logged only "Connection established with LabVIEW" and never reached

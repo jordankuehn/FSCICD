@@ -119,14 +119,21 @@ Key packages:
   must match that. Scope therefore follows wherever the config is committed,
   which is why a shared default config would need its targeting rewritten per
   run.
-- **LabVIEW operations can hang rather than fail.** A MassCompile against a
-  project whose dependencies cannot be resolved was observed running for 17 hours
-  having logged only "Connection established", so every container invocation is
-  bounded by `labview.timeout_minutes` (default 120). Killing the docker client
+- **LabVIEW operations can hang rather than fail**, so every container invocation
+  is bounded by `labview.timeout_minutes` (default 120). Killing the docker client
   does not stop the container, so each run is given a `--name` and force-removed
-  on timeout. Note also that MassCompile **writes** recompiled VIs back to the
-  checkout while VI Analyzer only reads, which makes it far more sensitive to a
-  slow working directory — a cloud-synced folder, for instance.
+  on timeout.
+- **Mass Compile hangs on a project whose dependencies are missing; VI Analyzer
+  does not.** Against a 1642-VI project needing 148 absent VIPM packages,
+  MassCompile logged only "Connection established with LabVIEW" and never reached
+  `#### Starting Mass Compile` — once for 17 hours from a cloud-synced folder with
+  library mounts, and again for 41 minutes from local disk with none, so neither
+  the sync nor the mounts caused it. LabVIEW appears to search the disk for each
+  unresolvable subVI. VI Analyzer completed the same tree in 21–25 minutes and
+  reported per-VI. **Do not use Mass Compile to diagnose missing dependencies**;
+  it will only burn the timeout. Note also that MassCompile writes recompiled VIs
+  back to the checkout while VI Analyzer only reads, so it is additionally
+  sensitive to a slow working directory.
 - **Per-operation `-Help` does not work** in this container: `LabVIEWCLI
   -OperationName <op> -Headless -Help` ignores `-Help` and attempts the
   operation, so required arguments are discovered from its `-350050` errors one

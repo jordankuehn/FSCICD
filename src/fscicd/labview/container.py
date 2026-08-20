@@ -21,6 +21,7 @@ import codecs
 import re
 import shutil
 import subprocess
+import uuid
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
@@ -42,6 +43,20 @@ from fscicd.models import (
 OPERATION_PARTIAL_EXIT = 3
 
 VIANALYZER_REPORT_NAME = "vi_analyzer_report.txt"
+
+# Removing a container should be near-instant; this only guards against the
+# cleanup itself hanging after a timeout has already gone wrong.
+_DOCKER_RM_TIMEOUT_SECONDS = 60
+
+
+def _container_name_from(argv: list[str]) -> str | None:
+    """Return the ``--name`` value in a built docker command, if present."""
+
+    try:
+        return argv[argv.index("--name") + 1]
+    except (ValueError, IndexError):
+        return None
+
 
 # Directories that hold tooling or build output rather than project source, and
 # so must not supply a discovered VI Analyzer configuration.
@@ -94,6 +109,10 @@ class ContainerRunner(LabVIEWRunner):
             "docker",
             "run",
             "--rm",
+            # Named so a timed-out run can be removed; killing the client alone
+            # leaves the container running.
+            "--name",
+            f"fscicd-{uuid.uuid4().hex[:12]}",
             "-v",
             f"{self.repo_path.resolve()}:{paths.workdir}",
             "-v",
@@ -198,12 +217,39 @@ class ContainerRunner(LabVIEWRunner):
                 "docker executable not found; use runner: mock for local development "
                 "or run on a host with Docker and the NI LabVIEW image available."
             )
-        proc = subprocess.run(argv, capture_output=True, text=True)  # noqa: S603
+        timeout = self.config.timeout_minutes * 60
+        try:
+            proc = subprocess.run(  # noqa: S603
+                argv, capture_output=True, text=True, timeout=timeout
+            )
+        except subprocess.TimeoutExpired as exc:
+            # Killing the client does not stop the container, so it has to be
+            # removed by name or it keeps holding the runner and the machine.
+            self._force_remove_container(argv)
+            raise ContainerRunnerError(
+                f"LabVIEW container command exceeded "
+                f"labview.timeout_minutes ({self.config.timeout_minutes} min) and was "
+                f"killed. A LabVIEW operation that hangs rather than fails will "
+                f"otherwise occupy the runner indefinitely; raise the limit if the "
+                f"project genuinely needs longer."
+            ) from exc
         if proc.returncode not in ok_codes:
             raise ContainerRunnerError(
                 f"LabVIEW container command failed ({proc.returncode}):\n{proc.stderr}"
             )
         return proc.returncode
+
+    def _force_remove_container(self, argv: list[str]) -> None:
+        name = _container_name_from(argv)
+        if name is None:  # pragma: no cover - every command is built with --name
+            return
+        subprocess.run(  # noqa: S603
+            ["docker", "rm", "--force", name],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=_DOCKER_RM_TIMEOUT_SECONDS,
+        )
 
     def _out_dir(self) -> Path:
         out_dir = self.repo_path / "build" / "labview-out"

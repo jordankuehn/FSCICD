@@ -20,6 +20,10 @@ labview:
   # the Windows mount layout (C:\work, C:\out) and LabVIEW.exe path.
   image: nationalinstruments/labview:2026q3-windows
   headless: true
+  # A LabVIEW operation can hang instead of failing — searching for dependencies
+  # it cannot resolve, for instance — so the container is killed after this long.
+  # Real analysis of a large project takes tens of minutes; raise it if needed.
+  timeout_minutes: 120
 
 capabilities:
   # Mass Compile is the first capability wired up for real container runs: it

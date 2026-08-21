@@ -131,8 +131,17 @@ Key packages:
   host directories actually being complete — an intermediate run scored 217 only
   because one of the project's own packages had been moved out of the host tree,
   which is worth remembering before reading anything into a drop.
-  `C:\Program Files\National Instruments\Shared` has not been tested and is the
-  obvious next candidate.
+  Eliminated as causes, all measured at the same 255: additionally mounting
+  `resource`/`project`/`menus`; mounting
+  `C:\Program Files\National Instruments\Shared`; the LabVIEW image quarter (a Q1
+  and a Q3 run produced byte-identical reports); and sibling project sources,
+  tested by mounting the whole parent directory **at its host path** inside the
+  container so both relative and absolute references resolve. Every run reports
+  `0 VIs were unloadable`, so LabVIEW loads each VI and finds it broken. What
+  remains untested is activation/registry state for the licence-gated packages
+  (DQMH, QControl, wireflow), NI driver installs such as DAQmx and VISA, and
+  system DLLs. Do not add further mount permutations without evidence from the
+  project's own dependency list.
 - **Mass Compile hangs on a project whose dependencies are missing; VI Analyzer
   does not.** Against a 1642-VI project needing 148 absent VIPM packages,
   MassCompile logged only "Connection established with LabVIEW" and never reached

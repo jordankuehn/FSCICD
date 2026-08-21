@@ -57,6 +57,12 @@ Key packages:
   or 32-bit — do not add version/bitness branching. Headless mode (`-Headless` /
   `LV_RTE_HEADLESS=1`) skips license activation for CI, so no license server needs
   to be reachable from the runner.
+- **The image quarter must match the LabVIEW the VIs were saved in.** The projects
+  are on **2026 Q3**, so the configs pin `nationalinstruments/labview:2026q3-*`.
+  LabVIEW will not load VIs saved by a newer build, so running a `2026q1` image
+  against a Q3 codebase reports breakage that has nothing to do with the code. The
+  quarter is a deployment detail, not the version/bitness branching ruled out
+  above.
 - **Container platform (Windows vs Linux) *is* branched**, unlike version/bitness:
   NI's two image families have different mount layouts, so `labview.platform`
   (inferred from the image tag) selects `C:\work`/`C:\out` + an explicit
@@ -97,10 +103,56 @@ Key packages:
   explanation. A `.viancfg` also carries statically mapped target paths from the
   machine that authored it, which do not exist under the container's `C:\work`
   mount, so a committed config needs its targeting rewritten at run time.
-- VI Analyzer still parses a report shape the real operation may not emit
-  (`-ReportPath` / `-ReportType JSON` are unverified), so it is disabled in
-  `examples/fscicd.windows.yml` until proven. Treat any capability's parser as
-  unproven until a real log is captured as a fixture.
+- **The VI Analyzer report is tab-separated plain text**, whatever extension
+  `-ReportPath` is given — not HTML and not JSON. `-ReportPath` is required, a
+  format argument is not, and `RunVIAnalyzer` exits **3** when analysis completed
+  but tests failed, exactly like MassCompile. See the captured
+  `tests/fixtures/vi_analyzer_report_windows_2026.txt`. VI Analyzer reports no
+  severity of its own, so `parse_vianalyzer_report()` imposes one; only
+  `Broken VI` is classified from observed output and everything else defaults to
+  medium, which at the default `fail_on_severity: high` means unclassified
+  findings are reported without failing the pipeline.
+- **A `.viancfg`'s `<Path>"."</Path>` resolves relative to the config file's own
+  directory**, not the mount root or the working directory. Values in that XML
+  are quoted inside the element and backslashes are doubled
+  (`<RelativePath>"project\\_VI Analyzer\\..."</RelativePath>`), so any rewrite
+  must match that. Scope therefore follows wherever the config is committed,
+  which is why a shared default config would need its targeting rewritten per
+  run.
+- **LabVIEW operations can hang rather than fail**, so every container invocation
+  is bounded by `labview.timeout_minutes` (default 120). Killing the docker client
+  does not stop the container, so each run is given a `--name` and force-removed
+  on timeout.
+- **Mounting a developer machine's LabVIEW directories into the container supplies
+  some of a project's VIPM dependencies, but not all.** Measured against FS
+  iControl (1642 VIs, 148 packages): no mounts 207 passing;
+  `vi.lib` + `user.lib` + `instr.lib` 255; additionally `resource` + `project` +
+  `menus` also 255, so those three add nothing here. Both figures depend on the
+  host directories actually being complete — an intermediate run scored 217 only
+  because one of the project's own packages had been moved out of the host tree,
+  which is worth remembering before reading anything into a drop.
+  Eliminated as causes, all measured at the same 255: additionally mounting
+  `resource`/`project`/`menus`; mounting
+  `C:\Program Files\National Instruments\Shared`; the LabVIEW image quarter (a Q1
+  and a Q3 run produced byte-identical reports); and sibling project sources,
+  tested by mounting the whole parent directory **at its host path** inside the
+  container so both relative and absolute references resolve. Every run reports
+  `0 VIs were unloadable`, so LabVIEW loads each VI and finds it broken. What
+  remains untested is activation/registry state for the licence-gated packages
+  (DQMH, QControl, wireflow), NI driver installs such as DAQmx and VISA, and
+  system DLLs. Do not add further mount permutations without evidence from the
+  project's own dependency list.
+- **Mass Compile hangs on a project whose dependencies are missing; VI Analyzer
+  does not.** Against a 1642-VI project needing 148 absent VIPM packages,
+  MassCompile logged only "Connection established with LabVIEW" and never reached
+  `#### Starting Mass Compile` — once for 17 hours from a cloud-synced folder with
+  library mounts, and again for 41 minutes from local disk with none, so neither
+  the sync nor the mounts caused it. LabVIEW appears to search the disk for each
+  unresolvable subVI. VI Analyzer completed the same tree in 21–25 minutes and
+  reported per-VI. **Do not use Mass Compile to diagnose missing dependencies**;
+  it will only burn the timeout. Note also that MassCompile writes recompiled VIs
+  back to the checkout while VI Analyzer only reads, so it is additionally
+  sensitive to a slow working directory.
 - **Per-operation `-Help` does not work** in this container: `LabVIEWCLI
   -OperationName <op> -Headless -Help` ignores `-Help` and attempts the
   operation, so required arguments are discovered from its `-350050` errors one

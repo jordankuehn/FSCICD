@@ -56,10 +56,15 @@ from the image tag, because the two images have different filesystem layouts:
 
 | `labview.image` | Platform | Mounts | `-LabVIEWPath` |
 |---|---|---|---|
-| `...:2026q1-windows` | `windows` | `C:\work`, `C:\out` | LabVIEW.exe under Program Files |
-| `...:2026q1-linux` | `linux` | `/work`, `/out` | resolved by LabVIEWCLI |
+| `...:2026q3-windows` | `windows` | `C:\work`, `C:\out` | LabVIEW.exe under Program Files |
+| `...:2026q3-linux` | `linux` | `/work`, `/out` | resolved by LabVIEWCLI |
 
 Set `labview.platform` explicitly only when the tag does not encode it.
+
+The **quarter** in the tag matters too: LabVIEW will not load VIs saved by a newer
+build, so an image older than the LabVIEW that authored the code reports breakage
+that has nothing to do with the code. These configs pin `2026q3` to match the
+projects.
 
 ## Bitbucket Pipelines setup
 
@@ -71,9 +76,9 @@ The cloud Linux step needs nothing. The Windows step needs a runner you host:
 2. **Docker Desktop → Windows containers** — right-click the tray icon and
    choose *Switch to Windows containers*. Verify with
    `docker info --format '{{.OSType}}'` (expect `windows`).
-3. **Pull the image** — `docker pull nationalinstruments/labview:2026q1-windows`
+3. **Pull the image** — `docker pull nationalinstruments/labview:2026q3-windows`
    (~10 GB). Smoke-test with
-   `docker run --rm nationalinstruments/labview:2026q1-windows LabVIEWCLI -Help`.
+   `docker run --rm nationalinstruments/labview:2026q3-windows LabVIEWCLI -Help`.
 4. **Install Python 3.10+** on the runner host and make sure it is on `PATH`.
 5. *(Optional)* add `BITBUCKET_USERNAME` + `BITBUCKET_APP_PASSWORD` as secured
    repository variables to post commit build statuses. Without them, status
@@ -162,17 +167,20 @@ LabVIEW backend, enabled capabilities, and reporting.
 | Capability | `mock` runner | `container` runner |
 |---|---|---|
 | Mass Compile | Implemented | **Working** — verified against a real container log |
-| VI Analyzer | Implemented | Invocation correct; report parsing unproven |
+| VI Analyzer | Implemented | **Working** — verified against a real container report |
 | Unit Tests | Implemented | **Blocked** — needs a custom worker image |
-
-Both are disabled in
-[`examples/fscicd.windows.yml`](examples/fscicd.windows.yml), for different
-reasons.
 
 **VI Analyzer** needs a `.viancfg`, which selects the tests to run and can only be
 authored in the LabVIEW IDE — `RunVIAnalyzer` refuses to start without one
-(`-350050`). FSCICD discovers a committed configuration, but its report arguments
-have not been exercised against a real run yet.
+(`-350050`). FSCICD discovers a committed configuration and parses the operation's
+report. It stays disabled in
+[`examples/fscicd.windows.yml`](examples/fscicd.windows.yml) only because the
+sample project ships no configuration and its VIs are stubs.
+
+Note that a project whose dependencies are absent from the image will report
+almost every VI as broken, since LabVIEW cannot resolve their subVIs. Meaningful
+analysis of a real project therefore wants those dependencies installed too — the
+same requirement unit tests have.
 
 **Unit Tests** cannot run in the stock NI image: `RunUnitTests` fails with
 `-350053` because the UTF JUnit Report library is absent, and Caraya and VI Tester

@@ -18,10 +18,10 @@ invocation can be verified without a LabVIEW install.
 from __future__ import annotations
 
 import codecs
-import json
 import re
 import shutil
 import subprocess
+import uuid
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
@@ -37,9 +37,26 @@ from fscicd.models import (
     ViCompileResult,
 )
 
-# MassCompile returns 3 when it finished but flagged some VIs as bad. That is a
-# reportable outcome, not a runner failure, so the log still gets parsed.
-MASSCOMPILE_PARTIAL_EXIT = 3
+# Both MassCompile and RunVIAnalyzer exit 3 when the operation itself completed
+# but its findings were negative - bad VIs, or failing analyzer tests. That is a
+# reportable outcome, not a runner failure, so the output still gets parsed.
+OPERATION_PARTIAL_EXIT = 3
+
+VIANALYZER_REPORT_NAME = "vi_analyzer_report.txt"
+
+# Removing a container should be near-instant; this only guards against the
+# cleanup itself hanging after a timeout has already gone wrong.
+_DOCKER_RM_TIMEOUT_SECONDS = 60
+
+
+def _container_name_from(argv: list[str]) -> str | None:
+    """Return the ``--name`` value in a built docker command, if present."""
+
+    try:
+        return argv[argv.index("--name") + 1]
+    except (ValueError, IndexError):
+        return None
+
 
 # Directories that hold tooling or build output rather than project source, and
 # so must not supply a discovered VI Analyzer configuration.
@@ -92,6 +109,10 @@ class ContainerRunner(LabVIEWRunner):
             "docker",
             "run",
             "--rm",
+            # Named so a timed-out run can be removed; killing the client alone
+            # leaves the container running.
+            "--name",
+            f"fscicd-{uuid.uuid4().hex[:12]}",
             "-v",
             f"{self.repo_path.resolve()}:{paths.workdir}",
             "-v",
@@ -180,10 +201,10 @@ class ContainerRunner(LabVIEWRunner):
             "RunVIAnalyzer",
             "-ConfigPath",
             self._config_path_arg(config_path),
+            # -ReportPath is required; a format argument is not, and the operation
+            # writes tab-separated plain text regardless of the extension given.
             "-ReportPath",
-            paths.out("vi_analyzer.json"),
-            "-ReportType",
-            "JSON",
+            paths.out(VIANALYZER_REPORT_NAME),
         ]
         cmd += self._labview_path_args()
         if self.config.headless:
@@ -196,12 +217,39 @@ class ContainerRunner(LabVIEWRunner):
                 "docker executable not found; use runner: mock for local development "
                 "or run on a host with Docker and the NI LabVIEW image available."
             )
-        proc = subprocess.run(argv, capture_output=True, text=True)  # noqa: S603
+        timeout = self.config.timeout_minutes * 60
+        try:
+            proc = subprocess.run(  # noqa: S603
+                argv, capture_output=True, text=True, timeout=timeout
+            )
+        except subprocess.TimeoutExpired as exc:
+            # Killing the client does not stop the container, so it has to be
+            # removed by name or it keeps holding the runner and the machine.
+            self._force_remove_container(argv)
+            raise ContainerRunnerError(
+                f"LabVIEW container command exceeded "
+                f"labview.timeout_minutes ({self.config.timeout_minutes} min) and was "
+                f"killed. A LabVIEW operation that hangs rather than fails will "
+                f"otherwise occupy the runner indefinitely; raise the limit if the "
+                f"project genuinely needs longer."
+            ) from exc
         if proc.returncode not in ok_codes:
             raise ContainerRunnerError(
                 f"LabVIEW container command failed ({proc.returncode}):\n{proc.stderr}"
             )
         return proc.returncode
+
+    def _force_remove_container(self, argv: list[str]) -> None:
+        name = _container_name_from(argv)
+        if name is None:  # pragma: no cover - every command is built with --name
+            return
+        subprocess.run(  # noqa: S603
+            ["docker", "rm", "--force", name],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=_DOCKER_RM_TIMEOUT_SECONDS,
+        )
 
     def _out_dir(self) -> Path:
         out_dir = self.repo_path / "build" / "labview-out"
@@ -212,7 +260,7 @@ class ContainerRunner(LabVIEWRunner):
         out_dir = self._out_dir()
         exit_code = self._run(
             self.build_masscompile_command(out_dir),
-            ok_codes=(0, MASSCOMPILE_PARTIAL_EXIT),
+            ok_codes=(0, OPERATION_PARTIAL_EXIT),
         )
         return parse_masscompile_log(
             out_dir / "mass_compile.log",
@@ -222,8 +270,11 @@ class ContainerRunner(LabVIEWRunner):
 
     def vi_analyzer(self, config_path: str) -> ViAnalyzerResult:
         out_dir = self._out_dir()
-        self._run(self.build_vianalyzer_command(out_dir, config_path))
-        return parse_vianalyzer_report(out_dir / "vi_analyzer.json")
+        self._run(
+            self.build_vianalyzer_command(out_dir, config_path),
+            ok_codes=(0, OPERATION_PARTIAL_EXIT),
+        )
+        return parse_vianalyzer_report(out_dir / VIANALYZER_REPORT_NAME)
 
     def unit_tests(self, test_globs: list[str], frameworks: list[str]) -> UnitTestResult:
         raise ContainerRunnerError(
@@ -271,7 +322,7 @@ _BROKEN_MESSAGE = "LabVIEW flagged the VI as bad; it could not load or compile h
 _MISSING_MESSAGE = "A subVI or dependency could not be found in this container."
 
 
-def read_masscompile_log(path: Path) -> str:
+def read_report_text(path: Path) -> str:
     """Read a MassCompile log, which LabVIEW may write as UTF-16.
 
     The encoding is chosen from the bytes rather than by trial decoding: ASCII
@@ -323,7 +374,7 @@ def parse_masscompile_log(
             f"Mass Compile log not found at {log_path}; the container produced no log."
         )
 
-    lines = read_masscompile_log(log_path).splitlines()
+    lines = read_report_text(log_path).splitlines()
     problems: dict[str, ViCompileResult] = {}
     seen: set[str] = set()
     skipped: set[str] = set()
@@ -402,7 +453,7 @@ def parse_masscompile_log(
     skipped_count = len(skipped - set(problems))
     compiled = max(total - broken - skipped_count, 0)
 
-    if broken or operation_failed or exit_code not in (0, MASSCOMPILE_PARTIAL_EXIT):
+    if broken or operation_failed or exit_code not in (0, OPERATION_PARTIAL_EXIT):
         status = Status.FAILED
     elif total:
         status = Status.PASSED
@@ -419,24 +470,96 @@ def parse_masscompile_log(
     )
 
 
-def parse_vianalyzer_report(path: Path) -> ViAnalyzerResult:
-    """Parse the worker's VI Analyzer JSON report into a structured result."""
+# RunVIAnalyzer writes a tab-separated plain-text report, whatever extension
+# -ReportPath is given: counted summaries, then one block per failing VI holding
+# its path and a "<test name>\t<message>" line per finding. See
+# tests/fixtures/vi_analyzer_report_windows_2026.txt for a captured report.
+_VIA_KEYVALUE_RE = re.compile(r"^(?P<key>[^\t]+)\t(?P<value>.*)$")
+_VIA_VI_HEADER_RE = re.compile(
+    r"^(?P<name>.+?\.(?:vi|ctl|vit|ctt))\s+\((?P<path>.+)\)\s*$", re.IGNORECASE
+)
+_VIA_FAILED_HEADING = "Failed Tests"
+_VIA_ERRORS_HEADING = "Testing Errors"
+_VIA_COUNT_HEADINGS = ("Results", "Errors")
 
-    data = json.loads(Path(path).read_text())
-    findings = [
-        AnalyzerFinding(
-            vi_path=item["vi_path"],
-            test=item.get("test", ""),
-            category=item.get("category", ""),
-            severity=item.get("severity", "low"),
-            message=item.get("message", ""),
+# VI Analyzer reports no severity of its own, so one is imposed. Only "Broken VI"
+# is classified from observed output; anything else defaults to medium until a
+# real run shows what it reports, so this grows from evidence rather than guesses.
+# Note that with the default fail_on_severity of "high", findings from
+# unclassified tests are reported but do not fail the pipeline.
+_VIA_CLASSIFIED_TESTS = {"Broken VI": ("Correctness", "high")}
+_VIA_DEFAULT_CLASS = ("Unclassified", "medium")
+
+
+def parse_vianalyzer_report(path: Path) -> ViAnalyzerResult:
+    """Parse a ``LabVIEWCLI -OperationName RunVIAnalyzer`` report."""
+
+    report_path = Path(path)
+    if not report_path.is_file():
+        raise ContainerRunnerError(
+            f"VI Analyzer report not found at {report_path}; the operation wrote none."
         )
-        for item in data.get("findings", [])
-    ]
-    high = sum(1 for f in findings if f.severity == "high")
-    tested = data.get("tested_vis", len({f.vi_path for f in findings}))
-    status = Status.FAILED if high else Status.PASSED
-    return ViAnalyzerResult(status=status, tested_vis=tested, findings=findings)
+
+    counts: dict[str, int] = {}
+    findings: list[AnalyzerFinding] = []
+    section = "summary"
+    current_vi: str | None = None
+
+    for raw_line in read_report_text(report_path).splitlines():
+        line = raw_line.rstrip()
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith(_VIA_FAILED_HEADING) and "\t" not in line:
+            section, current_vi = "failed", None
+            continue
+        if stripped == _VIA_ERRORS_HEADING:
+            section, current_vi = "testing_errors", None
+            continue
+        if stripped in _VIA_COUNT_HEADINGS:
+            section = "summary"
+            continue
+
+        if section == "failed":
+            header = _VIA_VI_HEADER_RE.match(line)
+            if header:
+                current_vi = _to_repo_relative(header.group("path"))
+                continue
+            finding = _VIA_KEYVALUE_RE.match(line)
+            if finding and current_vi is not None:
+                test = finding.group("key").strip()
+                category, severity = _VIA_CLASSIFIED_TESTS.get(test, _VIA_DEFAULT_CLASS)
+                findings.append(
+                    AnalyzerFinding(
+                        vi_path=current_vi,
+                        test=test,
+                        category=category,
+                        severity=severity,
+                        message=finding.group("value").strip(),
+                    )
+                )
+            continue
+
+        if section == "summary":
+            pair = _VIA_KEYVALUE_RE.match(line)
+            if pair and pair.group("value").strip().isdigit():
+                counts[pair.group("key").strip()] = int(pair.group("value").strip())
+
+    tested = counts.get("VIs Analyzed", len({f.vi_path for f in findings}))
+    unloadable = counts.get("VI not loadable", 0)
+    if findings or unloadable:
+        status = Status.FAILED
+    else:
+        status = Status.PASSED if tested else Status.SKIPPED
+    return ViAnalyzerResult(
+        status=status,
+        tested_vis=tested,
+        findings=findings,
+        tests_run=counts.get("Total Tests Run", 0),
+        passed_tests=counts.get("Passed Tests", 0),
+        failed_tests=counts.get("Failed Tests", len(findings)),
+        unloadable_vis=unloadable,
+    )
 
 
 def parse_junit_report(path: Path, framework: str) -> UnitTestResult:

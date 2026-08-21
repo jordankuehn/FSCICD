@@ -21,7 +21,7 @@ labview:
   # development and CI of FSCICD itself. Switch to "container" on a runner that
   # has Docker + the NI headless image.
   runner: mock
-  image: nationalinstruments/labview:2026q1-linux
+  image: nationalinstruments/labview:2026q3-linux
   headless: true
 
 capabilities:

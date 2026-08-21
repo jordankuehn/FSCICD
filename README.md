@@ -100,6 +100,43 @@ To add FSCICD to a LabVIEW application repository, copy
 to its root as `bitbucket-pipelines.yml` and commit an `fscicd.yml` based on
 [`examples/fscicd.windows.yml`](examples/fscicd.windows.yml).
 
+## Worker image for a project with VIPM dependencies
+
+The stock NI image runs LabVIEW but knows nothing about a project's VIPM
+add-ons, so a real project's VIs load broken. Measured against a 1642-VI project
+needing 148 packages, only 207 VIs (13%) were analyzable on the stock image, and
+mounting a developer machine's `vi.lib`, `user.lib` and `instr.lib` raised that
+only to 255 — copying files is not installing, which also does registry,
+`Settings.ini` and palette registration.
+
+[`docker/labview-worker.windows.Dockerfile`](docker/labview-worker.windows.Dockerfile)
+installs them properly, with VIPM, at build time:
+
+```powershell
+# 1. Stage the project's VIPM configuration (git-ignored)
+Copy-Item "path\to\Your Project.vipc" docker\vipm\
+
+# 2. Build, with Docker in Windows-container mode
+docker build -f docker/labview-worker.windows.Dockerfile -t fscicd-labview:2026q3-windows .
+```
+
+Then point `fscicd.yml` at the result:
+
+```yaml
+labview:
+  image: fscicd-labview:2026q3-windows
+  platform: windows
+```
+
+A `.vipc` that **bundles** its packages also works, and is required when a
+project depends on in-house packages published on no VIPM repository: the
+installer extracts the bundled payloads so they can be installed from file.
+
+The base image, the VIPM-in-a-container technique, and the workarounds in
+[`docker/vipm/install-vipc.ps1`](docker/vipm/install-vipc.ps1) come from
+[LabVIEW-CI-with-Containers](https://github.com/elijah286/LabVIEW-CI-with-Containers),
+used with the author's permission.
+
 ## Install (development)
 
 ```bash

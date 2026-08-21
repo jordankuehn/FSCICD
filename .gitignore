@@ -21,3 +21,9 @@ coverage.xml
 
 # FSCICD generated reports
 /build/reports/
+
+# Worker-image build inputs. A project's VIPM configuration is large (a bundled
+# one runs to hundreds of megabytes) and specific to that project, so it is
+# staged locally rather than committed.
+/docker/vipm/*.vipc
+/docker/vipm/*.vip

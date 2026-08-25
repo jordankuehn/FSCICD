@@ -18,27 +18,18 @@
 # author's permission.
 #
 # -----------------------------------------------------------------------------
-# Build
+# IMPORTANT: `docker build` cannot install the packages
 # -----------------------------------------------------------------------------
-#   1. Copy the project's .vipc into docker/vipm/ (git-ignored — these are large
-#      and project-specific). A .vipc that BUNDLES its packages also works, and
-#      is required when a project depends on in-house packages published on no
-#      VIPM repository: the installer extracts the bundled .vip payloads and
-#      prefers them over the public mirrors.
-#   2. From the repository root, with Docker in Windows-container mode:
+# The VIPM CLI delegates to an engine that is a LabVIEW-runtime GUI application.
+# Under `docker run` it starts and reports Responding within a minute; under
+# `docker build` it never completes its startup handshake, and every VIPM call
+# fails with "Operation 'wait for VIPM startup' timed out" after the full
+# timeout. Windows build steps run their children on a non-interactive window
+# station, which the engine evidently cannot use.
 #
-#        docker build -f docker/labview-worker.windows.Dockerfile `
-#          -t fscicd-labview:2026q3-windows .
-#
-#   3. Point fscicd.yml at the result:
-#
-#        labview:
-#          image: fscicd-labview:2026q3-windows
-#          platform: windows
-#
-# Expect the build to take a long time and to need several attempts: it installs
-# every package with a live headless LabVIEW, and VIPM's engine is fragile when
-# cold. The installer logs what failed and why.
+# So this Dockerfile deliberately does NOT run the installer. It only stages the
+# tooling. The packages are installed by running a container and committing it —
+# see docker/README.md for the two commands.
 # =============================================================================
 
 # The LCWC base adds VI Analyzer support, the NI Unit Test Framework, VIPM and
@@ -56,12 +47,14 @@ ARG LABVIEW_BITNESS=64
 ENV LABVIEW_VERSION=${LABVIEW_VERSION} `
     LABVIEW_BITNESS=${LABVIEW_BITNESS}
 
+# Staged, not executed. The installer runs later in a container, because a build
+# step cannot start the VIPM engine (see the note above).
 COPY docker/vipm/ C:/vipm/
 
 RUN if (-not (Get-ChildItem -Path 'C:\vipm' -Filter '*.vipc' -ErrorAction SilentlyContinue)) { `
       throw 'No .vipc found in C:\vipm. Copy the project configuration into docker/vipm/ before building.' `
     }; `
-    powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File 'C:\vipm\install-vipc.ps1'
+    Write-Host 'Staged the VIPM tooling. Run docker/README.md''s install step to bake the packages in.'
 
 # Every LabVIEW launch headless and activation-free, so tools that start
 # LabVIEW.exe directly do not stop at the activation wizard.

@@ -29,7 +29,10 @@
 $ErrorActionPreference = 'Stop'
 $ProgressPreference    = 'SilentlyContinue'
 
-$VipcDir        = 'C:\vipm'
+# Overridable so the run-and-commit build can work in a container-local
+# directory: extracting a bundled configuration writes hundreds of megabytes,
+# which should not land in a bind-mounted source tree.
+$VipcDir        = if ($Env:VIPC_DIR) { $Env:VIPC_DIR } else { 'C:\vipm' }
 $LabVIEWVersion = if ($Env:LABVIEW_VERSION) { $Env:LABVIEW_VERSION } else { '2026' }
 $LabVIEWBitness = if ($Env:LABVIEW_BITNESS) { $Env:LABVIEW_BITNESS } else { '64' }
 

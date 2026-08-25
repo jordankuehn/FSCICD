@@ -221,10 +221,11 @@ same requirement unit tests have.
 
 **Unit Tests** cannot run in the stock NI image: `RunUnitTests` fails with
 `-350053` because the UTF JUnit Report library is absent, and Caraya and VI Tester
-are VIPM packages rather than CLI operations. This needs a worker image with those
-packages baked in via VIPM — the reason
-[`docker/labview-worker.Dockerfile`](docker/labview-worker.Dockerfile) exists,
-though it currently only extends the Linux image and installs nothing.
+are VIPM packages rather than CLI operations. Both halves have to be present —
+`ni-utf-labview-support` through `nipkg`, and the `ni_lib_utf_junit_report`
+packages through VIPM — which is what
+[the Windows worker image](#worker-image-for-a-project-with-vipm-dependencies)
+is for. That image is not yet proven end to end; see the note there.
 
 Roadmap after those: VIDiff, VI Browser, Antidoc, and an aggregated multi-commit
 dashboard.

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
@@ -12,11 +11,11 @@ from fscicd.labview.container import (
     parse_junit_report,
     parse_masscompile_log,
     parse_vianalyzer_report,
-    read_masscompile_log,
+    read_report_text,
 )
 from fscicd.models import Status
 
-WINDOWS_IMAGE = "nationalinstruments/labview:2026q1-windows"
+WINDOWS_IMAGE = "nationalinstruments/labview:2026q3-windows"
 
 
 def _windows_config() -> LabVIEWConfig:
@@ -80,7 +79,7 @@ def test_vianalyzer_relative_config_path_is_mapped_into_the_container(tmp_path):
 
 def test_platform_inferred_from_image_tag():
     assert LabVIEWConfig(image=WINDOWS_IMAGE).platform == "windows"
-    assert LabVIEWConfig(image="nationalinstruments/labview:2026q1-linux").platform == "linux"
+    assert LabVIEWConfig(image="nationalinstruments/labview:2026q3-linux").platform == "linux"
     assert LabVIEWConfig(image="nationalinstruments/labview:latest-windows").platform == "windows"
 
 
@@ -111,13 +110,6 @@ def test_linux_commands_omit_labview_path(tmp_path):
     assert "-LabVIEWPath" not in cmd
     assert cmd[cmd.index("-DirectoryToCompile") + 1] == "/work"
     assert cmd[cmd.index("-LogFilePath") + 1] == "/out/mass_compile.log"
-
-
-def test_windows_analyzer_report_path(tmp_path):
-    (tmp_path / "checks.viancfg").write_text("stub")
-    runner = ContainerRunner(_windows_config(), tmp_path)
-    analyzer = runner.build_vianalyzer_command(tmp_path / "out", "")
-    assert analyzer[analyzer.index("-ReportPath") + 1] == "C:\\out\\vi_analyzer.json"
 
 
 def test_unit_tests_refuse_to_run_in_the_stock_image(tmp_path):
@@ -183,7 +175,7 @@ def test_real_log_is_ascii_not_utf16():
     raw = REAL_LOG.read_bytes()
     assert not raw.startswith((b"\xff\xfe", b"\xfe\xff"))
     assert b"\x00" not in raw
-    assert "CompileFile:" in read_masscompile_log(REAL_LOG)
+    assert "CompileFile:" in read_report_text(REAL_LOG)
 
 
 def test_compile_verbs_are_counted_separately(tmp_path):
@@ -302,18 +294,84 @@ def test_parse_masscompile_log_requires_a_log(tmp_path):
         parse_masscompile_log(tmp_path / "missing.log")
 
 
-def test_parse_vianalyzer_report(tmp_path):
-    report = tmp_path / "via.json"
+REAL_VIA_REPORT = Path(__file__).parent / "fixtures" / "vi_analyzer_report_windows_2026.txt"
+
+
+def test_parse_real_vianalyzer_report():
+    """A captured RunVIAnalyzer report: tab-separated text, not HTML or JSON."""
+
+    result = parse_vianalyzer_report(REAL_VIA_REPORT)
+
+    assert result.status is Status.FAILED
+    assert result.tested_vis == 1642
+    assert result.tests_run == 1642
+    assert result.passed_tests == 207
+    assert result.failed_tests == 1435
+    assert result.unloadable_vis == 0
+
+    # The fixture is trimmed to four failing-VI blocks; the summary counts above
+    # are the operation's own, so they still describe the full run.
+    assert len(result.findings) == 4
+    first = result.findings[0]
+    assert first.vi_path == "_Code/Well/Well Messages/Write Tares Msg/Do.vi"
+    assert first.test == "Broken VI"
+    assert first.severity == "high"
+    assert first.message == "This VI is broken."
+
+
+def test_vianalyzer_report_summary_headings_are_not_findings(tmp_path):
+    """'Failed Tests' is both a count and a section heading; only one is a finding."""
+
+    report = tmp_path / "report.txt"
     report.write_text(
-        json.dumps(
-            {
-                "tested_vis": 1,
-                "findings": [
-                    {"vi_path": "A.vi", "test": "T", "category": "Style", "severity": "high"}
-                ],
-            }
-        )
+        "VI Analyzer Results\r\n\r\nResults\r\n"
+        "VIs Analyzed\t10\r\nTotal Tests Run\t10\r\nPassed Tests\t9\r\n"
+        "Failed Tests\t1\r\nSkipped Tests\t0\r\n\r\n"
+        "Errors\r\nVI not loadable\t0\r\n\r\n"
+        "Failed Tests (sorted by VI)\r\n\r\n"
+        "Main.vi (C:\\work\\Main.vi)\r\nBroken VI\tThis VI is broken.\r\n\r\n"
+        "Testing Errors\r\n\r\n(none)\r\n"
     )
     result = parse_vianalyzer_report(report)
-    assert result.status is Status.FAILED
-    assert result.tested_vis == 1
+    assert result.failed_tests == 1
+    assert [(f.vi_path, f.test) for f in result.findings] == [("Main.vi", "Broken VI")]
+
+
+def test_vianalyzer_unclassified_tests_default_to_medium(tmp_path):
+    report = tmp_path / "report.txt"
+    report.write_text(
+        "Results\r\nVIs Analyzed\t1\r\n\r\nFailed Tests (sorted by VI)\r\n\r\n"
+        "Main.vi (C:\\work\\Main.vi)\r\nCoercion Dots\tThere are coercion dots.\r\n"
+    )
+    finding = parse_vianalyzer_report(report).findings[0]
+    assert finding.severity == "medium"
+    assert finding.category == "Unclassified"
+
+
+def test_vianalyzer_clean_report_passes(tmp_path):
+    report = tmp_path / "report.txt"
+    report.write_text(
+        "Results\r\nVIs Analyzed\t12\r\nTotal Tests Run\t12\r\n"
+        "Passed Tests\t12\r\nFailed Tests\t0\r\n\r\n"
+        "Failed Tests (sorted by VI)\r\n\r\nTesting Errors\r\n\r\n(none)\r\n"
+    )
+    result = parse_vianalyzer_report(report)
+    assert result.status is Status.PASSED
+    assert result.findings == []
+    assert result.tested_vis == 12
+
+
+def test_vianalyzer_missing_report_raises(tmp_path):
+    with pytest.raises(ContainerRunnerError):
+        parse_vianalyzer_report(tmp_path / "nope.txt")
+
+
+def test_vianalyzer_command_has_no_format_argument(tmp_path):
+    """A format argument is not required, and the operation ignores the extension."""
+
+    (tmp_path / "checks.viancfg").write_text("stub")
+    runner = ContainerRunner(_windows_config(), tmp_path)
+    cmd = runner.build_vianalyzer_command(tmp_path / "out", "")
+    assert "-ReportType" not in cmd
+    assert "-ReportSaveType" not in cmd
+    assert cmd[cmd.index("-ReportPath") + 1] == "C:\\out\\vi_analyzer_report.txt"

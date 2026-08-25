@@ -21,7 +21,7 @@ from fscicd.labview.container import ContainerRunner, ContainerRunnerError
 from fscicd.models import Status
 from fscicd.pipeline import run_pipeline
 
-WINDOWS_IMAGE = "nationalinstruments/labview:2026q1-windows"
+WINDOWS_IMAGE = "nationalinstruments/labview:2026q3-windows"
 
 # Shaped after a real log captured from the NI Windows container (see
 # tests/fixtures/masscompile_windows_2026.log): one file errors, one compiles,
@@ -126,6 +126,41 @@ def test_clean_container_run_passes(monkeypatch, labview_repo):
     assert result.status is Status.PASSED
     assert result.broken == 0
     assert result.total == 4
+
+
+def test_timeout_is_reported_and_the_container_removed(monkeypatch, labview_repo):
+    """A hanging LabVIEW operation must not occupy the runner indefinitely."""
+
+    monkeypatch.setattr(container_module.shutil, "which", lambda _n: "/usr/bin/docker")
+    calls: list[list[str]] = []
+
+    def fake_run(argv, *args, **kwargs):
+        calls.append(argv)
+        if argv[:3] == ["docker", "rm", "--force"]:
+            return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+        raise subprocess.TimeoutExpired(argv, kwargs.get("timeout", 0))
+
+    monkeypatch.setattr(container_module.subprocess, "run", fake_run)
+    config = LabVIEWConfig(runner="container", image=WINDOWS_IMAGE, timeout_minutes=5)
+    runner = ContainerRunner(config, labview_repo)
+
+    with pytest.raises(ContainerRunnerError) as excinfo:
+        runner.mass_compile(["**/*.vi"], ["**/*.lvproj"])
+    assert "timeout_minutes (5 min)" in str(excinfo.value)
+
+    # The run was given the configured timeout, and the container it named was
+    # then force-removed: killing the docker client alone leaves it running.
+    assert calls[0][:3] == ["docker", "run", "--rm"]
+    container_name = calls[0][calls[0].index("--name") + 1]
+    assert container_name.startswith("fscicd-")
+    assert calls[1] == ["docker", "rm", "--force", container_name]
+
+
+def test_each_run_gets_a_unique_container_name(labview_repo):
+    runner = ContainerRunner(LabVIEWConfig(runner="container", image=WINDOWS_IMAGE), labview_repo)
+    first = runner.build_masscompile_command(labview_repo / "out")
+    second = runner.build_masscompile_command(labview_repo / "out")
+    assert first[first.index("--name") + 1] != second[second.index("--name") + 1]
 
 
 def test_container_failure_exit_code_raises(monkeypatch, labview_repo):

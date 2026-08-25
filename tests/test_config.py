@@ -68,6 +68,14 @@ def test_load_missing_config_raises(tmp_path):
         load_config(tmp_path / "nope.yml")
 
 
+def test_timeout_minutes_parsed_and_validated():
+    cfg = parse_config({"project": {"name": "X"}, "labview": {"timeout_minutes": 30}})
+    assert cfg.labview.timeout_minutes == 30
+    assert parse_config({"project": {"name": "X"}}).labview.timeout_minutes == 120
+    with pytest.raises(ConfigError):
+        parse_config({"project": {"name": "X"}, "labview": {"timeout_minutes": 0}})
+
+
 def test_shipped_example_configs_load():
     examples = Path(__file__).resolve().parents[1] / "examples"
 

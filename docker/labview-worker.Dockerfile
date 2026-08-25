@@ -11,7 +11,7 @@
 # CI runner. Local development of FSCICD uses `runner: mock` and does not build
 # or pull this image.
 # =============================================================================
-ARG LABVIEW_IMAGE=nationalinstruments/labview:2026q1-linux
+ARG LABVIEW_IMAGE=nationalinstruments/labview:2026q3-linux
 FROM ${LABVIEW_IMAGE}
 
 # Default every LabVIEW invocation in this container to headless (no activation).

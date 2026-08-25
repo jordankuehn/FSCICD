@@ -66,6 +66,13 @@ class ViAnalyzerResult:
     status: Status
     tested_vis: int
     findings: list[AnalyzerFinding] = field(default_factory=list)
+    # Counts the operation reports for itself. Worth carrying separately: a run
+    # where LabVIEW could not load the VIs reports plenty of failures without
+    # saying anything about the code's actual quality.
+    tests_run: int = 0
+    passed_tests: int = 0
+    failed_tests: int = 0
+    unloadable_vis: int = 0
 
     def count_by_severity(self, severity: str) -> int:
         return sum(1 for f in self.findings if f.severity == severity)

@@ -137,11 +137,74 @@ Key packages:
   and a Q3 run produced byte-identical reports); and sibling project sources,
   tested by mounting the whole parent directory **at its host path** inside the
   container so both relative and absolute references resolve. Every run reports
-  `0 VIs were unloadable`, so LabVIEW loads each VI and finds it broken. What
-  remains untested is activation/registry state for the licence-gated packages
-  (DQMH, QControl, wireflow), NI driver installs such as DAQmx and VISA, and
-  system DLLs. Do not add further mount permutations without evidence from the
-  project's own dependency list.
+  `0 VIs were unloadable`, so LabVIEW loads each VI and finds it broken. Do not
+  add further mount permutations: the file dimension is now exhausted, see the
+  replication result below.
+- **Copying the developer machine's whole installed tree into the image scores
+  the same 255, so files are not what is missing.** This goes well past the
+  mount experiments: `vi.lib`, `user.lib`, `instr.lib`, `resource`, `project`,
+  `menus`, `examples`, `templates` and `AppLibs` from the host's LabVIEW 2026,
+  plus the 64-bit `National Instruments\Shared` tree, plus the 168 NI-owned
+  DLLs in `C:\Windows\System32` (`nisyscfg.dll`, `nicaiu.dll`, the VISA and IVI
+  set) — 22 741 files added to `vi.lib` alone, 42 731 to `Shared`, every package
+  the project needs verifiably present afterwards (`vi.lib\SEF Energy` 1814
+  files, `GPower` 1204, `Delacor` 147). Result: **255 of 1642**, identical to
+  the three-library mount, in 16 minutes. Re-run against a freshly re-copied
+  source tree it is **251 of 1648** — the same 15%. So the two remaining
+  suspects from the mount work, NI driver installs and system DLLs, are both
+  eliminated, and whatever breaks these VIs is not a file that exists on the
+  developer's machine. The copies are additive (`robocopy /XC /XN /XO`, which
+  copies only files absent at the destination) so NI's own baseline in the image
+  is never overwritten; the image and the host are both LabVIEW `26.3f0`.
+- **Do not import the host's NI registry hives into the container — it breaks
+  LabVIEW.** Importing `HKLM\SOFTWARE\National Instruments`, its `WOW6432Node`
+  twin and `HKLM\SOFTWARE\JKI` leaves LabVIEW launching but never opening VI
+  Server, so `LabVIEWCLI` fails with `-350000` ("failed to establish a
+  connection with LabVIEW ... ensure LabVIEW is running with VI server enabled
+  on the correct port"). Without the import, VI Server is listening on 3363
+  **12 seconds** after launch. That kills the "activation/registry state for the
+  licence-gated packages" theory as a *practical* route even before asking
+  whether it would have helped.
+- **When something has been added to `vi.lib`, launch LabVIEW yourself and wait
+  for port 3363 rather than letting `LabVIEWCLI` launch it.** The CLI's own
+  connect window is short and its failure (`-350000`) looks identical to a
+  broken LabVIEW, which sends you diagnosing the wrong thing. Start
+  `LabVIEW.exe`, poll `netstat` for a listener on 3363, then call `LabVIEWCLI
+  -PortNumber 3363`. See `Test-VipmFileHandler`'s sibling logic in
+  `docker/vipm/` for the pattern.
+- **Do not try to identify missing dependencies by scanning VI binaries for
+  strings.** It reads as evidence and is almost entirely noise. Measured against
+  this project it "found" `Unload.lvclass` referenced by 1381 of 1540 VIs, which
+  matched the 1387 failures almost exactly and was pure coincidence: the real
+  string is `Load & Unload.lvclass` (NI's icon editor) and the `&` fell outside
+  the character class. Likewise `Casting Utility For Actors.vi` is really a
+  `.vim`, `Message Enqueuer.ctl` is class private data, and the GUID-named VIs
+  are packed-library internals — LabVIEW's own `LVStatus.txt` shows it loading
+  `GSW.lvlibp\1abvi3w\...\134e4d3a-....vi`. Name-only matching can only ever
+  prove absence, and it cannot even do that for anything inside a `.lvlibp`.
+- **What is actually still unexplained**: LabVIEW loads all 1642 VIs (`0 VIs were
+  unloadable`) and calls ~85% of them broken, uniformly across every module
+  (`_Code\FS iControl` 347, `Well` 199, `Source` 167, `Valve` 138, and so on
+  down), with a single reason, `Broken VI`. It is not the file set, not the
+  image quarter, not sibling sources, and not the freshness of the copy. The
+  untested question is no longer *what is missing from the container* but
+  **whether these VIs are broken on the developer's machine too** — nobody has
+  ever confirmed the project loads clean in LabVIEW 2026. Two things hint that
+  it might not: every `.lvproj` still carries `LVVersion="23008000"` (LabVIEW
+  2023) though 391 of 407 classes and libraries are saved at `26008000`, and NI
+  System Configuration (`nisyscfg.lvlib`, which the project's VIs call) is
+  installed for the host's LabVIEW **2023** and not for its 2026. The cheap next
+  experiment is to point VI Analyzer at a package's own VIs — say
+  `vi.lib\SEF Energy` — instead of the project: if the dependencies are broken
+  in the container too, the cause is environmental and downstream breakage is
+  just propagation.
+- **Keep the analysis copy honest.** `C:\temp\fsic` had drifted from the source:
+  36 files missing (including five message classes the project's libraries
+  declare as members), 24 files present that the source does not have, and 2088
+  differing in size because Mass Compile had rewritten them in place. It changed
+  nothing here — a re-copied tree scored the same 15% — but every number before
+  this was measured against it. Re-copy from source before a measurement that
+  matters, and remember the `.viancfg` lives only in the copy.
 - **VIPM cannot install packages in NI's 2026 Windows container at all, and the
   cause is a crash in JKI's own binaries.** The CLI never opens a socket: it
   reaches VIPM by launching `VIPM File Handler.exe -- /command:<op>

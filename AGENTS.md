@@ -198,6 +198,24 @@ Key packages:
   `vi.lib\SEF Energy` — instead of the project: if the dependencies are broken
   in the container too, the cause is environmental and downstream breakage is
   just propagation.
+- **The dependencies are themselves partly broken, and the developer's LabVIEW
+  2026 install is why.** Analysing `vi.lib\SEF Energy` instead of the project —
+  drop a copy of the `.viancfg` into the directory of interest, since its target
+  is `<Path>"."</Path>`, resolved relative to the config's own folder — gives
+  **697 of 946 passing (74%)** against the project's 15%. So the container is not
+  globally broken; but 249 VIs inside the in-house package are, and the project
+  sits on top of them, which is enough to explain the propagation. The failures
+  cluster in exactly the IO-facing sub-libraries: `fs-daq-logger` 51,
+  `fs-net-com` 63, the three actuator drivers 74, plus `Select FS System MAX.vi`.
+  The reason is that **LabVIEW 2026 on the developer's machine is a less complete
+  install than its LabVIEW 2023**: `vi.lib` is missing `nisyscfg` (which the
+  project's VIs call, and the only DLL they reference is `nisyscfg.dll`), `utf`,
+  `G CLI Tools` and several vendor trees, and `vi.lib\addons` is missing
+  `database`, `_SQL`, `JKI`, `RAFA Solutions` and more. Replication therefore
+  reproduces an install that never satisfied the project in the first place, and
+  no amount of copying can beat 255. To get past it the packages have to actually
+  be installed **for 2026** — on the host, and then replicated, or in the image,
+  which is what the VIPM crash above blocks.
 - **Keep the analysis copy honest.** `C:\temp\fsic` had drifted from the source:
   36 files missing (including five message classes the project's libraries
   declare as members), 24 files present that the source does not have, and 2088

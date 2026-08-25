@@ -24,6 +24,10 @@
                         For diagnosis only: the resulting image analyses a
                         project whose dependencies are incomplete, which reports
                         breakage that says nothing about the code.
+      VIPM_SKIP_PREFLIGHT=1
+                        Attempt the installs even when the VIPM File Handler
+                        preflight says the stack cannot answer. Only useful for
+                        re-testing a container whose VIPM has been changed.
 #>
 
 $ErrorActionPreference = 'Stop'
@@ -95,6 +99,12 @@ $script:LabVIEWTargetVersion = '{0}.{1} ({2}-bit)' -f
     (Get-Item $LabVIEWExe).VersionInfo.ProductMinorPart,
     $LabVIEWBitness
 
+# The quarter identifies the active target; the year identifies the installed
+# LabVIEW in the target list. See Set-VipmSettings for why the two differ.
+$script:LabVIEWYearVersion = '{0}.0 ({1}-bit)' -f
+    (Get-Item $LabVIEWExe).VersionInfo.ProductMajorPart,
+    $LabVIEWBitness
+
 function Test-VipmSettings {
     <#
         A file existing is not enough. Something in the VIPM stack creates a
@@ -112,15 +122,34 @@ function Set-VipmSettings {
 
     # The INI wants the executable as "/C/Program Files/.../LabVIEW.exe".
     $lvIniPath = '/' + (($LabVIEWExe -replace ':', '') -replace '\\', '/')
+
+    # Key set and conventions from JKI's own container guidance in
+    # vipm-io/vipm-desktop-issues#126. Two details matter:
+    #
+    #   * "Versions 0" carries the YEAR version (26.0) while
+    #     "Active Target.Version" carries the QUARTER (26.3). Using the quarter
+    #     for both leaves the CLI unable to detect a target at all - it reports
+    #     "Failed to detect LabVIEW version automatically". With the year in
+    #     place it reports "Auto-detected LabVIEW 2026 (64-bit)".
+    #   * "LVTN TOS Agreed MD5" pre-accepts the LabVIEW Tools Network terms.
+    #     Unaccepted terms are one of the things that can leave a GUI-less VIPM
+    #     waiting on a dialog nobody can see.
+    #
+    # The [General] suppressions exist for the same reason: an update check or
+    # a download warning has no one to answer it in a container.
     $settings = @"
 [General]
+check for updates on startup?="FALSE"
+Check new ver. of App. on startup?="FALSE"
+Suppress Download warning?="TRUE"
+Mass Compile After Package Install?="FALSE"
 IsFirstLaunch="FALSE"
 
 [Targets]
 Names.<size(s)>="1"
 Names 0="LabVIEW"
 Versions.<size(s)>="1"
-Versions 0="$script:LabVIEWTargetVersion"
+Versions 0="$script:LabVIEWYearVersion"
 Locations.<size(s)>="1"
 Locations 0="$lvIniPath"
 Ports="<size(s)=1> 3363"
@@ -131,8 +160,13 @@ Disabled 0="FALSE"
 Connection Timeout="120"
 Active Target.Name="LabVIEW"
 Active Target.Version="$script:LabVIEWTargetVersion"
+PingDelay(ms)="-1"
+PingTimeout(ms)="60000"
 CommunityEdition.<size(s)>="1"
 CommunityEdition 0="TRUE"
+
+[Repository]
+LVTN TOS Agreed MD5="5fac0d1abca8865f3ac38e1dee806526"
 "@
     New-Item -ItemType Directory -Path $VipmSettingsDir -Force | Out-Null
     Set-Content -Path $VipmSettings -Value $settings -Encoding ASCII
@@ -153,11 +187,16 @@ $ErrorActionPreference = 'Continue'
 & $VipmExe --version 2>&1 | Out-Host
 
 # --- The VIPM stack ----------------------------------------------------------
-# The CLI does not install anything itself: it delegates to the VIPM engine, a
-# LabVIEW-runtime application. Neither the engine nor LabVIEW is running in a
-# build layer, so both are started here. Without a live LabVIEW the CLI fails
-# with "IO error: Failed to load"; without a pre-started engine it blocks on
-# "wait for VIPM startup" until the whole timeout expires.
+# The CLI does not install anything itself. It needs two other things running:
+# LabVIEW, and the VIPM engine ("VI Package Manager.exe", which the CLI's own
+# diagnostics call "VIPM Desktop"). Neither is running in a fresh container, so
+# both are started here. Without a live LabVIEW the CLI fails with "IO error:
+# Failed to load".
+#
+# Starting the engine is not sufficient, and a healthy engine is not evidence
+# of a healthy stack: the engine opens no listening port and the CLI reaches it
+# by launching "VIPM File Handler.exe" against a pair of temp files. That
+# helper is what actually fails here - see Test-VipmFileHandler.
 $script:VipmEngineExe = @(
     (Join-Path $VipmDir 'VI Package Manager.exe'),
     'C:\Program Files (x86)\JKI\VI Package Manager\VI Package Manager.exe'
@@ -205,13 +244,91 @@ function Start-VipmEngine {
         Write-Warning '  The VIPM engine process is no longer present after launch.'
     }
 
-    # Starting the engine can reset Settings.ini. That would leave it with no
-    # LabVIEW target while the log still said the seeding succeeded, which is
-    # indistinguishable from the engine simply being slow.
-    if (-not (Test-VipmSettings)) {
-        Write-Warning '  Launching the engine cleared VIPM Settings.ini; re-seeding it.'
-        Set-VipmSettings 'cleared by the engine launch'
+    # No re-seed of Settings.ini here on purpose. Launching the engine was once
+    # suspected of clearing the file, but a seeded 505-byte file survives a full
+    # engine launch untouched; the zero-byte Settings.ini that prompted the
+    # suspicion is written by the CLI when the file is absent altogether, which
+    # the seeding above already prevents.
+}
+
+function Test-VipmFileHandler {
+    <#
+        The CLI does not talk to VIPM over a socket. It launches
+        "VIPM File Handler.exe" with a command name and a pair of temp files:
+
+            VIPM File Handler.exe -- /command:vipm_status
+                /progress_file:<tmp> /return_file:<tmp>
+
+        and polls for the return file. In NI's 2026 Windows container that
+        helper dies with 0xC0000005 two seconds in, before creating either
+        file, so the CLI polls a file that will never appear and every call
+        ends as "Operation 'wait for VIPM startup' timed out" - after the full
+        timeout, three times over if engine restarts are enabled.
+
+        Test the hop directly instead. It costs seconds and it names the real
+        failure, which no amount of waiting will.
+    #>
+
+    if ($Env:VIPM_SKIP_PREFLIGHT -eq '1') {
+        Write-Host 'Skipping the VIPM File Handler preflight (VIPM_SKIP_PREFLIGHT=1).'
+        return
     }
+
+    $handler = @(
+        (Join-Path $VipmDir 'support\VIPM File Handler.exe'),
+        'C:\Program Files (x86)\JKI\VI Package Manager\support\VIPM File Handler.exe'
+    ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+
+    if (-not $handler) {
+        Write-Warning 'VIPM File Handler.exe was not found; skipping the preflight.'
+        return
+    }
+
+    $stem     = [guid]::NewGuid().ToString('N').Substring(0, 12)
+    $progress = Join-Path $Env:TEMP "fscicd-prog-$stem"
+    $ret      = Join-Path $Env:TEMP "fscicd-ret-$stem"
+    $status   = Join-Path $Env:TEMP 'LVStatus.txt'
+    Remove-Item $status -Force -ErrorAction SilentlyContinue
+
+    Write-Host 'Preflight: asking VIPM File Handler for status ...'
+    $proc = Start-Process -FilePath $handler -PassThru -ArgumentList @(
+        '--', '/command:vipm_status', "/progress_file:$progress", "/return_file:$ret"
+    )
+    $deadline = (Get-Date).AddSeconds(60)
+    while ((Get-Date) -lt $deadline -and -not $proc.HasExited) { Start-Sleep -Seconds 2 }
+
+    if (-not $proc.HasExited) {
+        Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+        Write-Host '  The helper was still running after 60s; treating that as usable.'
+        return
+    }
+
+    if (Test-Path $ret) {
+        Write-Host "  The helper answered (exit $($proc.ExitCode)); the VIPM stack is reachable."
+        return
+    }
+
+    # No return file. Report the exit code and whatever LabVIEW logged, then
+    # stop: continuing only spends the timeout to learn the same thing.
+    $detail = if ($proc.ExitCode -eq -1073741819) {
+        'crashed with 0xC0000005 (access violation)'
+    } else {
+        "exited with code $($proc.ExitCode) without answering"
+    }
+    $lvStatus = if (Test-Path $status) {
+        ' LabVIEW logged: ' + ((((Get-Content $status -Raw) -split "`r?`n") |
+            Where-Object { $_.Trim() }) -join ' | ')
+    } else { '' }
+
+    # exit rather than throw: this runs with $ErrorActionPreference = 'Continue'
+    # so the native VIPM commands can be driven off exit codes.
+    Write-Error ("VIPM cannot install anything in this image: the VIPM File Handler $detail, " +
+                 'so it never wrote its return file and the CLI would wait for that file until ' +
+                 'every operation timed out ("wait for VIPM startup"). This is a fault inside ' +
+                 "JKI's own LabVIEW-built helper, not a configuration problem - LabVIEWCLI and " +
+                 'the .NET Framework are both healthy in the same container. See docker/README.md ' +
+                 "for the evidence and the upstream reports.$lvStatus")
+    exit 1
 }
 
 # A cold engine occasionally never completes its startup handshake and stays
@@ -337,6 +454,7 @@ $needsIndex = @($plan | Where-Object { $_.Bundled.Count -eq 0 }).Count -gt 0
 
 Start-HeadlessLabVIEW
 Start-VipmEngine
+Test-VipmFileHandler
 
 if ($needsIndex) {
     # A plain refresh reports success while downloading nothing, leaving an empty

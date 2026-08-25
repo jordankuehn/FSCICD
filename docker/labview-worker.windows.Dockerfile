@@ -18,18 +18,18 @@
 # author's permission.
 #
 # -----------------------------------------------------------------------------
-# IMPORTANT: `docker build` cannot install the packages
+# IMPORTANT: VIPM cannot currently install anything in this image at all
 # -----------------------------------------------------------------------------
-# The VIPM CLI delegates to an engine that is a LabVIEW-runtime GUI application.
-# Under `docker run` it starts and reports Responding within a minute; under
-# `docker build` it never completes its startup handshake, and every VIPM call
-# fails with "Operation 'wait for VIPM startup' timed out" after the full
-# timeout. Windows build steps run their children on a non-interactive window
-# station, which the engine evidently cannot use.
+# Not a build-vs-run problem, and not a window-station problem: the same failure
+# occurs under `docker run`. The VIPM CLI reaches VIPM by launching
+# "VIPM File Handler.exe" against a pair of temp files, and in NI's 2026 Windows
+# container that LabVIEW-built helper dies with 0xC0000005 about two seconds in,
+# before writing its return file. The CLI then polls for a file that will never
+# appear until the operation times out ("wait for VIPM startup").
 #
-# So this Dockerfile deliberately does NOT run the installer. It only stages the
-# tooling. The packages are installed by running a container and committing it —
-# see docker/README.md for the two commands.
+# So this Dockerfile deliberately does NOT run the installer; it only stages the
+# tooling, and install-vipc.ps1 checks that hop up front and fails in seconds
+# with the real reason. See docker/README.md for the full evidence.
 # =============================================================================
 
 # The LCWC base adds VI Analyzer support, the NI Unit Test Framework, VIPM and
@@ -58,6 +58,11 @@ RUN if (-not (Get-ChildItem -Path 'C:\vipm' -Filter '*.vipc' -ErrorAction Silent
 
 # Every LabVIEW launch headless and activation-free, so tools that start
 # LabVIEW.exe directly do not stop at the activation wizard.
+#
+# Note this also puts VIPM's LabVIEW-built helpers into 2026's headless run mode,
+# which turns their .NET load fault into a hard 0xC0000005 instead of a silent
+# clean exit. It is not the cause — they fail to answer either way — so the
+# variable stays for LabVIEWCLI's sake.
 ENV LV_RTE_HEADLESS=1
 
 LABEL org.fscicd.worker.platform="windows" `

@@ -7,22 +7,68 @@ mounting a developer machine's `vi.lib`, `user.lib` and `instr.lib` raised that
 only to 255 — copying files is not installing, which also does registry,
 `Settings.ini` and palette registration.
 
-This image installs the packages properly, with VIPM.
+This image is intended to install the packages properly, with VIPM.
 
-## Why it is two steps rather than a `docker build`
+## Status: blocked by a crash in VIPM's own helper
 
-The VIPM CLI does not install anything itself: it delegates to an engine that is
-a LabVIEW-runtime GUI application. Measured in the NI Windows container:
+**VIPM cannot install packages in NI's 2026 Windows container at all today.**
+`install-vipc.ps1` detects this up front and fails in seconds rather than
+spending the timeout to reach the same conclusion.
 
-| | Engine after 60s |
+The VIPM CLI never opens a socket. It reaches VIPM by launching a second
+LabVIEW-built executable with a command name and a pair of temp files, and
+polling for the return file:
+
+```
+VIPM File Handler.exe -- /command:vipm_status
+  /progress_file:<tmp> /return_file:<tmp>
+```
+
+In this container that helper dies with `0xC0000005` (access violation) two to
+three seconds in, before creating either file. The CLI then polls for a file
+that will never appear until the operation gives up with
+`Operation 'wait for VIPM startup' timed out`. LabVIEW records the fault in
+`%TEMP%\LVStatus.txt`:
+
+```
+Recursive load during LEIF load! ...\VIPM File Handler.exe\JKI Reuse Pool\Windows\
+VIPM - Check is Windows Task Runnning by Name (Scalar).vi is loading ...\System
+```
+
+What that rules out, all measured in the same image:
+
+| Suspect | Finding |
 |---|---|
-| `docker run` | alive, `Responding = True` |
-| `docker build` | never completes startup; every call fails with `Operation 'wait for VIPM startup' timed out` |
+| The engine is crashing | No. `VI Package Manager.exe` (which the CLI calls "VIPM Desktop") stays alive and `Responding`, and holds no listening port because it is not meant to |
+| A slow first-launch handshake | No. Watched for 8 minutes: engine idle at 3s CPU, package index untouched, install still failing |
+| Empty `Settings.ini` | Symptom, not cause. The failing CLI creates it when absent; a seeded file survives an engine launch untouched |
+| Missing .NET | No. .NET Framework 4.8 is complete and `System`, `System.Drawing`, `System.Windows.Forms` and `System.IO.Compression.FileSystem` all load fine |
+| Licensing | No. `Valid Activation Code: true`, and JKI document activation as optional for Free/Community |
+| `docker build` vs `docker run` | Irrelevant. Identical failure both ways, so the old window-station theory was wrong |
+| `LV_RTE_HEADLESS=1` | Aggravating only. It turns the fault into a hard crash; unset, the helper exits cleanly but still writes no return file |
+| Broken only for local files | No. By-name installs block on the same helper |
 
-Windows build steps run their children on a non-interactive window station,
-which the engine evidently cannot use. So the packages are installed by running
-a container and committing the result, which is a normal Docker technique for
-exactly this class of problem.
+It is specific to LabVIEW-built VIPM components: `VIPM Update Registry.exe` and
+`LabVIEW Tools Network.exe` fail identically, while `JKIUpdate.exe` — the one
+helper that is not a LabVIEW app — exits 0. LabVIEWCLI itself is healthy in the
+same container, which is why analysis works and only installation does not.
+
+Upstream, JKI have an open report of the same class of failure on Linux
+([vipm-desktop-issues#126](https://github.com/vipm-io/vipm-desktop-issues/issues/126)),
+where `vipm-desktop` goes defunct on 2026 images and the reporter notes that
+2025 images install correctly. There is no Windows equivalent to fall back to:
+NI publish no Windows image before 2026 (`2026q1`, `2026q1patch1`,
+`2026q1patch2`, `2026q3`, `latest`), and the working 2025 images are Linux-only.
+
+Until this is fixed upstream, use the stock image and accept the reduced
+analysis coverage, or supply the dependencies by another route.
+
+## Why the install is a run-and-commit rather than a `docker build`
+
+Because the installer needs a live LabVIEW and a live VIPM engine, which is
+awkward inside a single `RUN`, the packages are installed by running a container
+and committing the result — a normal Docker technique for this class of problem.
+The steps below are kept for when the upstream crash is fixed.
 
 ## 1. Stage the tooling
 

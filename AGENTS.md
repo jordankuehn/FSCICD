@@ -142,6 +142,46 @@ Key packages:
   (DQMH, QControl, wireflow), NI driver installs such as DAQmx and VISA, and
   system DLLs. Do not add further mount permutations without evidence from the
   project's own dependency list.
+- **VIPM cannot install packages in NI's 2026 Windows container at all, and the
+  cause is a crash in JKI's own binaries.** The CLI never opens a socket: it
+  reaches VIPM by launching `VIPM File Handler.exe -- /command:<op>
+  /progress_file:<tmp> /return_file:<tmp>` and polling for the return file. That
+  LabVIEW-built helper dies with `0xC0000005` two to three seconds in, before
+  writing either file, so the CLI polls a file that never appears until the
+  operation reports `Operation 'wait for VIPM startup' timed out`.
+  `%TEMP%\LVStatus.txt` records `Recursive load during LEIF load! ... VIPM -
+  Check is Windows Task Runnning by Name (Scalar).vi is loading ...\System`.
+  `VIPM Update Registry.exe` and `LabVIEW Tools Network.exe` fail the same way;
+  `JKIUpdate.exe`, the only non-LabVIEW helper, exits 0; LabVIEWCLI is healthy in
+  the same container. `install-vipc.ps1` preflights that hop and fails in
+  seconds — do not "fix" it by raising timeouts or restarting the engine.
+  Eliminated, all measured: the engine crashing (it stays alive and
+  `Responding`, and holds no port by design, so `Responding=True` proves
+  nothing); a slow first launch (watched 8 minutes, engine idle at 3s CPU);
+  the zero-byte `Settings.ini` (**written by the failing CLI when the file is
+  absent** — a seeded file survives an engine launch untouched, so the re-seed
+  logic that was added for it has been removed); missing .NET (Framework 4.8 is
+  complete and every assembly the helper loads works from PowerShell);
+  licensing; `docker build` vs `docker run` (identical failure, so the old
+  window-station theory was wrong); and local-file vs by-name installs (both
+  block on the same helper). `LV_RTE_HEADLESS=1` only aggravates it: unset, the
+  helper exits cleanly but still answers nothing. Note `vipm version` is **not**
+  a usable readiness check — it prints `2026.3.0 Free Edition` instantly with no
+  engine running and no `Settings.ini`. JKI have the same class of bug open on
+  Linux ([vipm-desktop-issues#126](https://github.com/vipm-io/vipm-desktop-issues/issues/126)),
+  where 2025 images work and 2026 ones do not; there is no Windows fallback,
+  because NI publish no Windows image before 2026 and the working 2025 images are
+  Linux-only.
+- **`Settings.ini` must follow JKI's container format**, not an invented one:
+  `Versions 0` carries the **year** (`26.0 (64-bit)`) while
+  `Active Target.Version` carries the **quarter** (`26.3 (64-bit)`). With the
+  quarter in both, the CLI cannot detect a target at all
+  ("Failed to detect LabVIEW version automatically"); with the year in place it
+  reports "Auto-detected LabVIEW 2026 (64-bit)". The file also needs
+  `[Repository] LVTN TOS Agreed MD5` to pre-accept the LabVIEW Tools Network
+  terms, and the `[General]` update-check and download-warning suppressions, so
+  nothing waits on a dialog no one can see. See `Set-VipmSettings` in
+  `docker/vipm/install-vipc.ps1`.
 - **Mass Compile hangs on a project whose dependencies are missing; VI Analyzer
   does not.** Against a 1642-VI project needing 148 absent VIPM packages,
   MassCompile logged only "Connection established with LabVIEW" and never reached

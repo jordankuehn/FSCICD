@@ -154,11 +154,28 @@ function Start-HeadlessLabVIEW {
 }
 
 function Start-VipmEngine {
-    if (-not $script:VipmEngineExe) { return }
-    if (Get-Process -Name 'VI Package Manager' -ErrorAction SilentlyContinue) { return }
-    Write-Host 'Pre-launching the VIPM engine so the CLI can attach ...'
-    Start-Process -FilePath $script:VipmEngineExe | Out-Null
-    Start-Sleep -Seconds 45
+    if (-not $script:VipmEngineExe) {
+        Write-Warning 'The VIPM engine executable was not found; the CLI will try to start it itself.'
+        return
+    }
+    if (Get-Process -Name 'VI Package Manager' -ErrorAction SilentlyContinue) {
+        Write-Host 'VIPM engine is already running.'
+        return
+    }
+    Write-Host "Pre-launching the VIPM engine so the CLI can attach: $script:VipmEngineExe"
+    $proc = Start-Process -FilePath $script:VipmEngineExe -PassThru
+    Start-Sleep -Seconds $script:EngineStartupSeconds
+    # Report whether it survived. An engine that exits immediately produces the
+    # same "wait for VIPM startup" timeout as one that is merely slow, and the
+    # two need completely different fixes.
+    if ($proc.HasExited) {
+        Write-Warning ("  The VIPM engine exited immediately (code $($proc.ExitCode)). " +
+                       'Every install will now time out waiting for it.')
+    } elseif (Get-Process -Name 'VI Package Manager' -ErrorAction SilentlyContinue) {
+        Write-Host "  VIPM engine is running after $($script:EngineStartupSeconds)s."
+    } else {
+        Write-Warning '  The VIPM engine process is no longer present after launch.'
+    }
 }
 
 # A cold engine occasionally never completes its startup handshake and stays
@@ -167,6 +184,7 @@ function Start-VipmEngine {
 $script:EngineWedged   = $false
 $script:RestartsUsed   = 0
 $script:MaxRestarts    = if ($Env:VIPM_MAX_ENGINE_RESTARTS -match '^\d+$') { [int]$Env:VIPM_MAX_ENGINE_RESTARTS } else { 2 }
+$script:EngineStartupSeconds = if ($Env:VIPM_ENGINE_STARTUP_SECONDS -match '^\d+$') { [int]$Env:VIPM_ENGINE_STARTUP_SECONDS } else { 45 }
 
 function Restart-VipmStack {
     Write-Warning ("  VIPM engine wedged; restarting the stack (attempt $($script:RestartsUsed)/$($script:MaxRestarts)) ...")
@@ -263,67 +281,105 @@ function Expand-BundledPackages([string] $VipcPath, [string] $Destination) {
 $vipcFiles = @(Get-ChildItem $VipcDir -Filter '*.vipc' -File)
 if ($vipcFiles.Count -eq 0) { throw "No .vipc files found in $VipcDir." }
 
+# Extract before anything else: whether a configuration bundles its payloads
+# decides whether the resolver index is needed at all, and a refresh that has to
+# reach the engine costs a full timeout when the engine is unwell.
+$plan = @(foreach ($vipc in $vipcFiles) {
+    [pscustomobject]@{
+        Vipc    = $vipc
+        Bundled = @(Expand-BundledPackages $vipc.FullName $VipcDir)
+    }
+})
+foreach ($item in $plan) {
+    if ($item.Bundled.Count -gt 0) {
+        Write-Host "Extracted $($item.Bundled.Count) bundled package file(s) from $($item.Vipc.Name)."
+    } else {
+        Write-Host "$($item.Vipc.Name) bundles no package files; its packages must be resolved by name."
+    }
+}
+$needsIndex = @($plan | Where-Object { $_.Bundled.Count -eq 0 }).Count -gt 0
+
 Start-HeadlessLabVIEW
 Start-VipmEngine
 
-# A plain refresh reports success while downloading nothing, leaving an empty
-# resolver index so every package resolves as "not found" (exit 3).
-Write-Host 'Refreshing VIPM package sources (refresh --force) ...'
-& $VipmExe refresh --force 2>&1 | Out-Host
-if ($LASTEXITCODE -ne 0) {
-    Write-Warning "  Refresh failed (exit $LASTEXITCODE); version-pinned installs may still resolve from cache."
+if ($needsIndex) {
+    # A plain refresh reports success while downloading nothing, leaving an empty
+    # resolver index so every package resolves as "not found" (exit 3).
+    Write-Host 'Refreshing VIPM package sources (refresh --force) ...'
+    & $VipmExe refresh --force 2>&1 | Out-Host
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "  Refresh failed (exit $LASTEXITCODE); version-pinned installs may still resolve from cache."
+    }
+} else {
+    # Installing from file needs no index, and skipping the refresh avoids
+    # spending a whole VIPM_TIMEOUT on it before the first install is attempted.
+    Write-Host 'Every configuration bundles its packages, so no package-source refresh is needed.'
+}
+
+# Install a set of targets - either local .vip paths or name@version specs -
+# as one batch, falling back to one at a time so the log names what failed.
+# Returns the targets that did not install.
+function Install-Targets {
+    param([string[]] $Targets, [string] $Label)
+
+    if (-not $Targets -or $Targets.Count -eq 0) { return @() }
+    Write-Host "  Installing $($Targets.Count) $Label as one batch ..."
+    if ((Invoke-Vipm @Targets) -eq 0) { return @() }
+
+    Write-Host "  Batch install failed; retrying one at a time to identify the failures ..."
+    $failures = New-Object System.Collections.Generic.List[string]
+    foreach ($target in $Targets) {
+        if ($script:EngineWedged) {
+            Write-Warning '  Engine wedged; abandoning the remaining targets.'
+            foreach ($remaining in $Targets) {
+                if (-not $failures.Contains($remaining)) { $failures.Add($remaining) }
+            }
+            break
+        }
+        if ((Invoke-Vipm $target) -ne 0) {
+            $name = if (Test-Path $target) { Split-Path $target -Leaf } else { $target }
+            Write-Warning "  FAILED: $name"
+            $failures.Add($target)
+        }
+    }
+    return @($failures.ToArray())
 }
 
 $failed = @()
-foreach ($vipc in $vipcFiles) {
+foreach ($item in $plan) {
+    $vipc    = $item.Vipc
+    $bundled = $item.Bundled
     Write-Host ''
     Write-Host "=== Applying $($vipc.Name) ==="
 
-    $bundled = @(Expand-BundledPackages $vipc.FullName $VipcDir)
+    # Prefer the bundled package FILES over anything else. Installing from file
+    # needs no resolver index, which matters because a refresh that fails leaves
+    # every by-name install resolving as "not found"; and it is the only route
+    # for a package published on no VIPM repository.
     if ($bundled.Count -gt 0) {
-        Write-Host "  Extracted $($bundled.Count) bundled package file(s) from the .vipc."
+        $failed += Install-Targets $bundled 'bundled package file(s)'
+        continue
     }
 
-    # Preferred path: hand VIPM the .vipc itself.
-    Write-Host "  Installing from the configuration file ..."
-    $exit = Invoke-Vipm '-y' $vipc.FullName
+    # No bundled payloads: hand VIPM the configuration file. Deliberately a
+    # single attempt - if this wedges the engine, retrying the identical call
+    # only burns another full timeout, so fall through to package names instead.
+    Write-Host '  No bundled payloads; installing from the configuration file ...'
+    $exit = Invoke-VipmOnce '-y' $vipc.FullName
     if ($exit -eq 0 -and $script:LastOutput -match 'No packages were installed') {
-        Write-Warning '  VIPM accepted the file but installed nothing; falling back to package-level installs.'
+        Write-Warning '  VIPM accepted the file but installed nothing; falling back to package names.'
         $exit = 42
     }
+    if ($exit -eq 0) { continue }
 
-    if ($exit -ne 0) {
-        if ($script:EngineWedged) {
-            Write-Warning "  The VIPM engine never came online; skipping $($vipc.Name)."
-            $failed += $vipc.Name
-            continue
-        }
-        # The engine is up but rejected the file-apply path (Code 42 and
-        # friends). Installing package by package still works.
-        Write-Host "  File install failed (exit $exit); installing package by package ..."
-        $specs = @(Get-VipcPackageSpecs $vipc.FullName)
-        if ($specs.Count -eq 0) {
-            Write-Warning "  No package names could be read from $($vipc.Name)."
-            $failed += $vipc.Name
-            continue
-        }
-
-        Write-Host "  $($specs.Count) packages to install."
-        $exit = Invoke-Vipm @specs
-        if ($exit -ne 0) {
-            Write-Host "  Batch install failed (exit $exit); retrying individually to identify the failures ..."
-            foreach ($spec in $specs) {
-                if ($script:EngineWedged) {
-                    Write-Warning '  Engine wedged; abandoning the remaining packages.'
-                    break
-                }
-                if ((Invoke-Vipm $spec) -ne 0) {
-                    Write-Warning "  FAILED: $spec"
-                    $failed += $spec
-                }
-            }
-        }
+    Write-Host "  Configuration-file install failed (exit $exit); installing by package name ..."
+    $specs = @(Get-VipcPackageSpecs $vipc.FullName)
+    if ($specs.Count -eq 0) {
+        Write-Warning "  No package names could be read from $($vipc.Name)."
+        $failed += $vipc.Name
+        continue
     }
+    $failed += Install-Targets $specs 'package(s) by name'
 }
 
 foreach ($name in @('vipm', 'VI Package Manager', 'LabVIEW')) {

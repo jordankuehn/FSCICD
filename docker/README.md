@@ -48,12 +48,15 @@ docker build -f docker/labview-worker.windows.Dockerfile -t fscicd-labview:stagi
 ## 2. Install the packages and commit
 
 ```powershell
-docker run --name fscicd-vipm-install fscicd-labview:staging powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "New-Item -ItemType Directory -Force C:\vipmwork | Out-Null; Copy-Item C:\vipm\* C:\vipmwork\ -Recurse -Force; $env:VIPC_DIR='C:\vipmwork'; & C:\vipmwork\install-vipc.ps1"
+docker run --name fscicd-vipm-install fscicd-labview:staging powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File C:\vipm\install-in-container.ps1
 ```
 
-The installer works in a container-local directory because extracting a bundled
-configuration writes hundreds of megabytes, which should not land in a
-bind-mounted source tree.
+Note the `-File`. An equivalent inline `-Command` needs nested quoting that the
+*host* shell expands first — a `$env:VIPC_DIR='...'` written inline is
+substituted before Docker sees it, leaving the variable unset in the container.
+The wrapper also copies the tooling to a container-local directory, because
+extracting a bundled configuration writes hundreds of megabytes and that should
+not land in a bind-mounted source tree.
 
 This takes a long time — every package installs against a live headless LabVIEW.
 The log names each package it installs and each one that fails.

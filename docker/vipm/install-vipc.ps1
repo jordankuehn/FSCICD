@@ -89,9 +89,27 @@ Write-Host "Using LabVIEW: $LabVIEWExe"
 # never been launched interactively, so it never exists.
 $VipmSettingsDir = 'C:\ProgramData\JKI\VIPM'
 $VipmSettings    = Join-Path $VipmSettingsDir 'Settings.ini'
-if (-not (Test-Path $VipmSettings)) {
-    $info = (Get-Item $LabVIEWExe).VersionInfo
-    $targetVersion = '{0}.{1} ({2}-bit)' -f $info.ProductMajorPart, $info.ProductMinorPart, $LabVIEWBitness
+
+$script:LabVIEWTargetVersion = '{0}.{1} ({2}-bit)' -f
+    (Get-Item $LabVIEWExe).VersionInfo.ProductMajorPart,
+    (Get-Item $LabVIEWExe).VersionInfo.ProductMinorPart,
+    $LabVIEWBitness
+
+function Test-VipmSettings {
+    <#
+        A file existing is not enough. Something in the VIPM stack creates a
+        ZERO-BYTE Settings.ini, and a plain Test-Path is satisfied by it - so
+        the seeding below used to be skipped, leaving the CLI with no LabVIEW
+        target to attach to. Require content, and require the target entry.
+    #>
+    if (-not (Test-Path $VipmSettings)) { return $false }
+    if ((Get-Item $VipmSettings).Length -eq 0) { return $false }
+    return ((Get-Content -Path $VipmSettings -Raw) -match 'Active Target\.Name')
+}
+
+function Set-VipmSettings {
+    param([string] $Because)
+
     # The INI wants the executable as "/C/Program Files/.../LabVIEW.exe".
     $lvIniPath = '/' + (($LabVIEWExe -replace ':', '') -replace '\\', '/')
     $settings = @"
@@ -102,7 +120,7 @@ IsFirstLaunch="FALSE"
 Names.<size(s)>="1"
 Names 0="LabVIEW"
 Versions.<size(s)>="1"
-Versions 0="$targetVersion"
+Versions 0="$script:LabVIEWTargetVersion"
 Locations.<size(s)>="1"
 Locations 0="$lvIniPath"
 Ports="<size(s)=1> 3363"
@@ -112,13 +130,20 @@ Disabled.<size(s)>="1"
 Disabled 0="FALSE"
 Connection Timeout="120"
 Active Target.Name="LabVIEW"
-Active Target.Version="$targetVersion"
+Active Target.Version="$script:LabVIEWTargetVersion"
 CommunityEdition.<size(s)>="1"
 CommunityEdition 0="TRUE"
 "@
     New-Item -ItemType Directory -Path $VipmSettingsDir -Force | Out-Null
     Set-Content -Path $VipmSettings -Value $settings -Encoding ASCII
-    Write-Host "Seeded VIPM Settings.ini targeting LabVIEW $targetVersion"
+    Write-Host "Seeded VIPM Settings.ini ($Because) targeting LabVIEW $script:LabVIEWTargetVersion"
+}
+
+if (Test-VipmSettings) {
+    Write-Host "VIPM Settings.ini already targets a LabVIEW; leaving it alone."
+} else {
+    $because = if (Test-Path $VipmSettings) { 'present but empty or untargeted' } else { 'absent' }
+    Set-VipmSettings $because
 }
 
 # From here native VIPM commands write progress to stderr; control flow is
@@ -178,6 +203,14 @@ function Start-VipmEngine {
         Write-Host "  VIPM engine is running after $($script:EngineStartupSeconds)s."
     } else {
         Write-Warning '  The VIPM engine process is no longer present after launch.'
+    }
+
+    # Starting the engine can reset Settings.ini. That would leave it with no
+    # LabVIEW target while the log still said the seeding succeeded, which is
+    # indistinguishable from the engine simply being slow.
+    if (-not (Test-VipmSettings)) {
+        Write-Warning '  Launching the engine cleared VIPM Settings.ini; re-seeding it.'
+        Set-VipmSettings 'cleared by the engine launch'
     }
 }
 

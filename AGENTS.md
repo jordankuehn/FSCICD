@@ -250,8 +250,7 @@ Key packages:
 - **So the broken VIs are environmental, and the environment difference left is
   not a file.** The same files that the owner reports loading cleanly in his IDE
   produce broken VIs in the container, and no file-based permutation changes the
-  number. Still untested: the per-user LabVIEW configuration under
-  `Documents\LabVIEW Data` and `AppData`, which no replication has touched.
+  number — including, now, the per-user configuration (see below).
 - **Third-party toolkit licences live in
   `C:\ProgramData\National Instruments\Partners\<Vendor>\Licenses\<Product>_License.lf`,
   and they cannot be carried into a container.** This is NI's Third Party
@@ -299,6 +298,43 @@ Key packages:
   So the container is not broken for large licensed vendor libraries, and
   licence gating explains the MQTT layer rather than the bulk of the project's
   failures.
+- **The per-user LabVIEW configuration is exhausted too: 252, byte-identical.**
+  This was the last dimension no replication had touched. Copying the whole of
+  `Documents\LabVIEW Data` (1219 files, 10.8 MB, caches excluded) into the
+  container user's profile and patching `neverShowAddonLicensingStartup=True`
+  into `LabVIEW.ini` produces a report differing from the previous run only in
+  its timestamp. Note where these live, because two of them are easy to miss:
+  `LabVIEW.ini` sits in the **install root**, which the replication never
+  copied because it only ever walked named subdirectories; and `Documents` is
+  OneDrive-redirected on this machine, so the 2026 per-user data is under
+  `C:\Users\<user>\OneDrive\Documents\LabVIEW Data`, not `~\Documents`. The ini
+  itself is 57 tokens of UI state plus `server.tcp.*`, so do not copy it
+  wholesale — a host ini with VI Server disabled would break `LabVIEWCLI`.
+  Nothing else there is a candidate: `AppData\Local\National Instruments` holds
+  only the AI assistant ("Nigel") and NLS plugin caches, `AppData\Roaming` only
+  FlexLogger. `ExtraVILib\ChannelInstances` looks promising — those are
+  generated Channel Wire instances that LabVIEW writes per user rather than
+  shipping in `vi.lib`, so they would be genuinely absent — but this project
+  references none of them (0 files matching `ChannelInstances`, `Stream-c(`,
+  `Tag-path` or `High Speed Stream-a`), so they belong to some other project.
+- **Do not mount a OneDrive-redirected folder into a Windows container: every
+  file arrives as zero bytes.** The container has no OneDrive filter driver, so
+  it sees the reparse points and not the content — measured as 1219 files at
+  10.76 MB on the host and the same 1219 files at 0 bytes through the mount,
+  with `robocopy` reporting exit 8 and nothing obviously wrong otherwise. Stage
+  such a directory to local disk on the host first, then mount the copy. Note
+  the files are not cloud-only placeholders (no `Offline` or
+  `RecallOnDataAccess` attribute on any of them), so checking for that
+  attribute does not predict this.
+- **`LabVIEWCLI` writing to stderr aborts the harness *after* the report is
+  written.** With `$ErrorActionPreference = 'Stop'`, PowerShell turns the CLI's
+  `Operation output:` on stderr into a terminating `NativeCommandError`, so the
+  script dies before printing the report header and the run looks like a failed
+  analysis. Check `C:\out\` before believing that — the analysis had completed
+  and the report was complete. For the same reason, patch `LabVIEW.ini` through
+  its raw text rather than `Add-Content`: if the file lacks a trailing newline,
+  `Add-Content` appends the new token onto the end of the last one, which here
+  would silently corrupt a `server.tcp.*` setting.
 - **Keep the analysis copy honest.** `C:\temp\fsic` had drifted from the source:
   36 files missing (including five message classes the project's libraries
   declare as members), 24 files present that the source does not have, and 2088

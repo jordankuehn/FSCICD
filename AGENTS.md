@@ -230,14 +230,34 @@ Key packages:
   45 wall seconds (~6% of one core), the CLI idle at 2 CPU-seconds, no report.
   That is not first-load compilation being slow, it is wedged. Note a listening
   port on 3363 is *not* readiness here, so retry the CLI rather than trusting it.
-- **Packed libraries (`.lvlibp`) look like the common cause of several of these
-  failures.** Every `Recursive load during LEIF load!` seen so far names one:
+- **Copying only the add-ons the project needs does not help either: 252.** With
+  `nisyscfg`, `nidaqmx`, `nivisa` and `nixnet` (plus their 32/64 variants) copied
+  and nothing else — 12 add-ons present, LabVIEW starting clean and VI Server up
+  in 12 seconds — the analysis completes in 11m43s at **252 of 1648**, against
+  251 with no add-ons at all. One VI. So the ceiling has now been measured five
+  ways (stock 207; three-library mount 255; whole-tree replication 255; fresh
+  source 251; driver add-ons 252) and no arrangement of the developer machine's
+  files moves it.
+- **Packed libraries (`.lvlibp`) are broken here, but they are not why the
+  project's VIs are broken.** Every `Recursive load during LEIF load!` names one:
   `JKI SDP.lvlibp` (JKI Design Palette), `GSW.lvlibp`, `LV AI Core.lvlibp`, and
-  VIPM's own LabVIEW-built `VIPM File Handler.exe`, which dies with
-  `0xC0000005` after logging exactly that. If `.lvlibp` loading is broken in NI's
-  2026 Windows container, one bug explains the VIPM install failure, the add-on
-  failure, and plausibly a share of the broken project VIs — worth confirming
-  before more permutations, and worth adding to the JKI/NI reports.
+  VIPM's own LabVIEW-built `VIPM File Handler.exe`, which dies with `0xC0000005`
+  after logging exactly that. That is worth reporting to JKI and NI, since one
+  bug would cover the VIPM install failure and the `lvai` wedge. It does **not**
+  explain the broken VIs, though: the project contains **zero** `.lvlibp`, and so
+  does `vi.lib\SEF Energy`, whose own VIs are 26% broken. Do not chase it as the
+  cause of the 255.
+- **So the broken VIs are environmental, and the environment difference left is
+  not a file.** The same files that the owner reports loading cleanly in his IDE
+  produce broken VIs in the container, and no file-based permutation changes the
+  number. What has never been tested properly is the licensing/activation state
+  of the licence-gated toolkits (DQMH, QControl, wireflow): unlicensed toolkits
+  are exactly the sort of thing that loads and then reports broken, and the only
+  attempt so far imported the whole NI registry hive, which broke VI Server
+  outright. The narrow experiment — importing just the licensing subkeys and
+  copying `C:\ProgramData\National Instruments\License Manager\Licenses` — has
+  not been run. Also untested: the per-user LabVIEW configuration under
+  `Documents\LabVIEW Data` and `AppData`, which no replication has touched.
 - **Keep the analysis copy honest.** `C:\temp\fsic` had drifted from the source:
   36 files missing (including five message classes the project's libraries
   declare as members), 24 files present that the source does not have, and 2088

@@ -250,14 +250,55 @@ Key packages:
 - **So the broken VIs are environmental, and the environment difference left is
   not a file.** The same files that the owner reports loading cleanly in his IDE
   produce broken VIs in the container, and no file-based permutation changes the
-  number. What has never been tested properly is the licensing/activation state
-  of the licence-gated toolkits (DQMH, QControl, wireflow): unlicensed toolkits
-  are exactly the sort of thing that loads and then reports broken, and the only
-  attempt so far imported the whole NI registry hive, which broke VI Server
-  outright. The narrow experiment — importing just the licensing subkeys and
-  copying `C:\ProgramData\National Instruments\License Manager\Licenses` — has
-  not been run. Also untested: the per-user LabVIEW configuration under
+  number. Still untested: the per-user LabVIEW configuration under
   `Documents\LabVIEW Data` and `AppData`, which no replication has touched.
+- **Third-party toolkit licences live in
+  `C:\ProgramData\National Instruments\Partners\<Vendor>\Licenses\<Product>_License.lf`,
+  and they cannot be carried into a container.** This is NI's Third Party
+  Licensing & Activation Toolkit (TPLAT). The licensed library states the
+  arrangement itself: `WF_WireQueue-MQTT.lvlib` carries
+  `NI.Lib.Lic.AO.LFName = WireQueue-MQTT_License.lf` and
+  `NI.Lib.Lic.AO.ActivationURL = https://softwarekey.ni.com/solo/unlock`, so
+  LabVIEW validates that file when it loads the library and — this being TPLAT
+  *development* licensing, checked at edit time — marks every member VI broken
+  when it does not validate. Note there are **two** copies of each `.lf`, same
+  size and different hash: the unactivated one shipped beside the `.lvlib` in
+  `vi.lib\addons\...`, and the activated one under `Partners`. Only the second
+  is a licence, which is why copying `vi.lib` alone never carried one.
+  Copying `Partners` in changes nothing, measured: WireQueue is **199 of 199**
+  VIs broken with the activated licence present and without it, byte for byte,
+  and the project stays at **252 of 1648** either way. The reason is that a
+  TPLAT activation is bound to the activating machine's NI Computer ID
+  (SoftwareKey Protection PLUS), and the container is a different computer —
+  developer machine `9TMF-9L9L-6QKC-23DX`, container `6RZC-VFFQ-5C7V-TFC5`.
+  Do not re-run the copy experiment; a licence for one computer shown to
+  another is not a licence.
+- **But the container's Computer ID is a fixed target, so a licence for it is
+  obtainable.** `generateComputerId.exe` (in
+  `...\Shared\License Manager\bin`, which a non-recursive listing misses)
+  reports `6RZC-VFFQ-5C7V-TFC5` in every fresh container despite the NAT MAC
+  changing each run, and reports the same value in the stock
+  `nationalinstruments/labview:2026q1-windows` and `2026q3-windows` images. So
+  it is baked into NI's published image rather than generated per build, and one
+  activation issued against it would cover every container from those images.
+  The route is a manual activation through `softwarekey.ni.com/solo/unlock`
+  against that Computer ID, dropped into
+  `Partners\WireFlow\Licenses\`. Two caveats before spending a licence seat on
+  it: the ID belongs to NI's shared public image, so it is not unique to this
+  organisation, and NI's licensing log
+  (`ProgramData\National Instruments\License Manager\Data\Licensing.log`)
+  records `Unknown host id [ffffffff]` from every licensing consumer in the
+  container — `NilmCompatibilityServer`, `NILicensingCmd`, `nilmUtil`, and
+  `VIPM Update Registry` back on 08/22 — so the legacy host-id path cannot
+  resolve there and may block even a correctly targeted licence.
+- **Licensing is real but it is not the 1396.** WireQueue accounts for 199
+  broken VIs of its own and 54 project files reference WireFlow, concentrated in
+  `FS-NET COM` — which matches the 63 failures in `fs-net-com` and nothing
+  wider. Against that, `vi.lib\GPower` — also TPLAT-licensed, with its own `.lf`
+  under `Partners` — analyses **1163 of 1163 passing** in the same container.
+  So the container is not broken for large licensed vendor libraries, and
+  licence gating explains the MQTT layer rather than the bulk of the project's
+  failures.
 - **Keep the analysis copy honest.** `C:\temp\fsic` had drifted from the source:
   36 files missing (including five message classes the project's libraries
   declare as members), 24 files present that the source does not have, and 2088

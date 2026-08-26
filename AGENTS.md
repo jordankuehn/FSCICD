@@ -198,24 +198,46 @@ Key packages:
   `vi.lib\SEF Energy` — instead of the project: if the dependencies are broken
   in the container too, the cause is environmental and downstream breakage is
   just propagation.
-- **The dependencies are themselves partly broken, and the developer's LabVIEW
-  2026 install is why.** Analysing `vi.lib\SEF Energy` instead of the project —
-  drop a copy of the `.viancfg` into the directory of interest, since its target
-  is `<Path>"."</Path>`, resolved relative to the config's own folder — gives
-  **697 of 946 passing (74%)** against the project's 15%. So the container is not
-  globally broken; but 249 VIs inside the in-house package are, and the project
-  sits on top of them, which is enough to explain the propagation. The failures
-  cluster in exactly the IO-facing sub-libraries: `fs-daq-logger` 51,
-  `fs-net-com` 63, the three actuator drivers 74, plus `Select FS System MAX.vi`.
-  The reason is that **LabVIEW 2026 on the developer's machine is a less complete
-  install than its LabVIEW 2023**: `vi.lib` is missing `nisyscfg` (which the
-  project's VIs call, and the only DLL they reference is `nisyscfg.dll`), `utf`,
-  `G CLI Tools` and several vendor trees, and `vi.lib\addons` is missing
-  `database`, `_SQL`, `JKI`, `RAFA Solutions` and more. Replication therefore
-  reproduces an install that never satisfied the project in the first place, and
-  no amount of copying can beat 255. To get past it the packages have to actually
-  be installed **for 2026** — on the host, and then replicated, or in the image,
-  which is what the VIPM crash above blocks.
+- **The dependencies are themselves partly broken in the container.** Analysing
+  `vi.lib\SEF Energy` instead of the project — drop a copy of the `.viancfg`
+  into the directory of interest, since its target is `<Path>"."</Path>`,
+  resolved relative to the config's own folder — gives **697 of 946 passing
+  (74%)** against the project's 15%. So the container is not globally broken;
+  but 249 VIs inside the in-house package are, and the project sits on top of
+  them, which is enough to explain the propagation. The failures cluster in
+  exactly the IO-facing sub-libraries: `fs-daq-logger` 51, `fs-net-com` 63, the
+  three actuator drivers 74, plus `Select FS System MAX.vi`.
+- **`C:\Program Files\NI\LVAddons` is the missing layer, and it is a separate
+  root that "replicate the LabVIEW tree" easily misses.** Since LabVIEW 2022 Q3
+  drivers and toolkits install to this version-independent location instead of
+  the version-specific LabVIEW folder, and LabVIEW virtually merges every
+  `vi.lib` beneath it with `LabVIEW 2026\vi.lib`
+  ([NI docs](https://www.ni.com/docs/en-US/bundle/labview/page/version-independent-add-ons.html)).
+  The developer machine has **55** add-ons there, 1.46 GB and 33 085 files,
+  including `nisyscfg`, `nidaqmx`, `nivisa`, `nixnet`, `crio` and `rseries`; the
+  stock image has **4** (`dfc`, `utf32`, `utf64`, `viawin`). This corrects an
+  earlier conclusion recorded here: LabVIEW 2026 on the developer's machine is
+  **not** a less complete install than its 2023, and those package VIs are not
+  broken there. `vi.lib\nisyscfg` and friends look absent for 2026 only because
+  the content moved to LVAddons. Any tree replication must include this root.
+- **But replicating LVAddons does not work in this container either — LabVIEW
+  wedges.** Two distinct failures, in order. First, the `lvai` add-on (the IDE's
+  AI assistant) floods `LVStatus.txt` with `Recursive load during LEIF load!`
+  from `LV AI Core.lvlibp` and LabVIEW stops answering 3363, so `LabVIEWCLI`
+  reports `-350000`. Excluding `lvai` clears those faults and LabVIEW starts
+  clean — and then simply never analyses: **three hours** on one
+  `RunVIAnalyzer`, LabVIEW flat at 140 MB and accumulating 2.8 CPU-seconds per
+  45 wall seconds (~6% of one core), the CLI idle at 2 CPU-seconds, no report.
+  That is not first-load compilation being slow, it is wedged. Note a listening
+  port on 3363 is *not* readiness here, so retry the CLI rather than trusting it.
+- **Packed libraries (`.lvlibp`) look like the common cause of several of these
+  failures.** Every `Recursive load during LEIF load!` seen so far names one:
+  `JKI SDP.lvlibp` (JKI Design Palette), `GSW.lvlibp`, `LV AI Core.lvlibp`, and
+  VIPM's own LabVIEW-built `VIPM File Handler.exe`, which dies with
+  `0xC0000005` after logging exactly that. If `.lvlibp` loading is broken in NI's
+  2026 Windows container, one bug explains the VIPM install failure, the add-on
+  failure, and plausibly a share of the broken project VIs — worth confirming
+  before more permutations, and worth adding to the JKI/NI reports.
 - **Keep the analysis copy honest.** `C:\temp\fsic` had drifted from the source:
   36 files missing (including five message classes the project's libraries
   declare as members), 24 files present that the source does not have, and 2088
@@ -253,6 +275,34 @@ Key packages:
   where 2025 images work and 2026 ones do not; there is no Windows fallback,
   because NI publish no Windows image before 2026 and the working 2025 images are
   Linux-only.
+- **JKI support containers on Linux only, and their documented setup has three
+  steps we never took.** VIPM 2026 Q3 does ship a real standalone CLI (Rust, not
+  a wrapper around the desktop app) with a
+  [Docker guide](https://docs.vipm.io/2026-Q3/cli/docker/), but the single
+  official example is `FROM nationalinstruments/labview:2026q1-linux` with an
+  Xvfb display script, and the guide's LabVIEW-launch instructions are marked
+  "Linux only". There is no Windows-container example anywhere in their
+  materials, and they say plainly that "LabVIEW containers are new ... expect
+  these setup steps to simplify". Before concluding anything further about the
+  Windows crash, note what their guide requires that `install-vipc.ps1` does
+  not do: `vipm activate --serial-number ... --name ... --email ...`, described
+  as **"Activate VIPM Pro (required today)"** — which cuts against the earlier
+  note here that licensing was eliminated, since that was inferred from
+  `vipm about` reporting Free Edition with a valid code and we have never
+  actually activated; `VIPM_NONINTERACTIVE=1`, to stop commands waiting on input
+  nobody can supply; and `vipm install --labview-version` plus
+  `--labview-bitness`, which the guide calls for whenever the image holds more
+  than one LabVIEW — and this image holds **four** (2023, 2024, 2025, 2026).
+  Also `vipm refresh` before each install.
+- **JKI Dragon cannot help inside a container.** It is a desktop GUI for opening
+  a project in the right LabVIEW version with the right packages, installed at
+  `C:\Program Files\JKI\Dragon` (2026.3.0 here). Its folder holds no CLI — one
+  `JKI Dragon.exe` plus four support executables (`exit-dragon`, `post-install`,
+  `registry-updater`, `update-helper`) — and the main binary carries LabVIEW
+  runtime markers, so it is another LabVIEW-built application, the exact class of
+  binary that dies with `0xC0000005` here. Its value is on a developer machine or
+  a persistent Windows runner, where it would provision the tree that then gets
+  replicated, not as a route into the image.
 - **`Settings.ini` must follow JKI's container format**, not an invented one:
   `Versions 0` carries the **year** (`26.0 (64-bit)`) while
   `Active Target.Version` carries the **quarter** (`26.3 (64-bit)`). With the

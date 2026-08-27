@@ -247,57 +247,105 @@ Key packages:
   explain the broken VIs, though: the project contains **zero** `.lvlibp`, and so
   does `vi.lib\SEF Energy`, whose own VIs are 26% broken. Do not chase it as the
   cause of the 255.
-- **So the broken VIs are environmental, and the environment difference left is
-  not a file.** The same files that the owner reports loading cleanly in his IDE
-  produce broken VIs in the container, and no file-based permutation changes the
-  number — including, now, the per-user configuration (see below).
+- **So the broken VIs are environmental — and one of the missing files turned
+  out to be a licence file.** The same sources that the owner reports loading
+  cleanly in his IDE produce broken VIs in the container, and no permutation of
+  the *LabVIEW tree* changed the number, including the per-user configuration
+  (see below). What none of those permutations covered was
+  `ProgramData\National Instruments\Partners`, and seeding that does move the
+  number for the licensed libraries — see the TPLAT entries below before
+  concluding anything from the 207/251/252/255 series.
 - **Third-party toolkit licences live in
   `C:\ProgramData\National Instruments\Partners\<Vendor>\Licenses\<Product>_License.lf`,
-  and they cannot be carried into a container.** This is NI's Third Party
-  Licensing & Activation Toolkit (TPLAT). The licensed library states the
-  arrangement itself: `WF_WireQueue-MQTT.lvlib` carries
+  and the container needs one there or every VI in the library is broken.** This
+  is NI's Third Party Licensing & Activation Toolkit (TPLAT). The licensed
+  library states the arrangement itself: `WF_WireQueue-MQTT.lvlib` carries
   `NI.Lib.Lic.AO.LFName = WireQueue-MQTT_License.lf` and
   `NI.Lib.Lic.AO.ActivationURL = https://softwarekey.ni.com/solo/unlock`, so
   LabVIEW validates that file when it loads the library and — this being TPLAT
   *development* licensing, checked at edit time — marks every member VI broken
-  when it does not validate. Note there are **two** copies of each `.lf`, same
-  size and different hash: the unactivated one shipped beside the `.lvlib` in
-  `vi.lib\addons\...`, and the activated one under `Partners`. Only the second
-  is a licence, which is why copying `vi.lib` alone never carried one.
-  Copying `Partners` in changes nothing, measured: WireQueue is **199 of 199**
-  VIs broken with the activated licence present and without it, byte for byte,
-  and the project stays at **252 of 1648** either way. The reason is that a
-  TPLAT activation is bound to the activating machine's NI Computer ID
-  (SoftwareKey Protection PLUS), and the container is a different computer —
-  developer machine `9TMF-9L9L-6QKC-23DX`, container `6RZC-VFFQ-5C7V-TFC5`.
-  Do not re-run the copy experiment; a licence for one computer shown to
-  another is not a licence.
-- **But the container's Computer ID is a fixed target, so a licence for it is
-  obtainable.** `generateComputerId.exe` (in
-  `...\Shared\License Manager\bin`, which a non-recursive listing misses)
-  reports `6RZC-VFFQ-5C7V-TFC5` in every fresh container despite the NAT MAC
-  changing each run, and reports the same value in the stock
-  `nationalinstruments/labview:2026q1-windows` and `2026q3-windows` images. So
-  it is baked into NI's published image rather than generated per build, and one
-  activation issued against it would cover every container from those images.
-  The route is a manual activation through `softwarekey.ni.com/solo/unlock`
-  against that Computer ID, dropped into
-  `Partners\WireFlow\Licenses\`. Two caveats before spending a licence seat on
-  it: the ID belongs to NI's shared public image, so it is not unique to this
-  organisation, and NI's licensing log
-  (`ProgramData\National Instruments\License Manager\Data\Licensing.log`)
-  records `Unknown host id [ffffffff]` from every licensing consumer in the
-  container — `NilmCompatibilityServer`, `NILicensingCmd`, `nilmUtil`, and
-  `VIPM Update Registry` back on 08/22 — so the legacy host-id path cannot
-  resolve there and may block even a correctly targeted licence.
-- **Licensing is real but it is not the 1396.** WireQueue accounts for 199
-  broken VIs of its own and 54 project files reference WireFlow, concentrated in
-  `FS-NET COM` — which matches the 63 failures in `fs-net-com` and nothing
-  wider. Against that, `vi.lib\GPower` — also TPLAT-licensed, with its own `.lf`
-  under `Partners` — analyses **1163 of 1163 passing** in the same container.
-  So the container is not broken for large licensed vendor libraries, and
-  licence gating explains the MQTT layer rather than the bulk of the project's
-  failures.
+  when it does not validate. NI describe that as designed behaviour, not a
+  malfunction: "Broken VIs when licensing state is invalid or expired" is on
+  their own feature checklist for the toolkit. There are **two** copies of each
+  `.lf`, same size and different hash: the as-shipped one beside the `.lvlib` in
+  `vi.lib\addons\...`, and the activated one under `Partners`.
+- **Seed the AS-SHIPPED `.lf` into `Partners`, not the activated one, and the
+  add-on lands in its 30-day evaluation and works.** This is the fix, measured
+  on `vi.lib\addons\WireFlow\_WireQueue`: **199 of 199 broken** with no licence
+  file or with the host-activated one, **214 of 216 passing** with the vendor's
+  own shipped file copied to
+  `ProgramData\National Instruments\Partners\WireFlow\Licenses\`. It is what a
+  real VIPM install puts there, and NI's tutorials state that a registered
+  add-on "will start off in evaluation mode" with the run arrow unbroken. See
+  `seed-eval-licences.ps1`, which walks every `.lf` under `vi.lib` and places it
+  under its vendor. The activated copy is worse than useless — it is bound to
+  the activating machine's TPLAT computer number, so it fails to open AND no
+  evaluation begins.
+- **`DPrintfLogging=True` in `LabVIEW.ini` is how to see any of this.** LabVIEW
+  then logs its licensing decisions to
+  `%TEMP%\LabVIEW_64_<ver>_headless_<user>_cur.txt`, tagged `LV2P`, and the
+  verdict is explicit rather than inferred from broken VIs. Failing:
+
+  ```
+  LV2P - License path: ...\Partners\WireFlow\Licenses\WireQueue-MQTT_License.lf
+  LV2P - Computer Number found to be : 101700461
+  LV2P - Opening license file
+  LV2P - Error opening license file
+  LV2P - pp_eztrial1() returned with status : 0
+  Bad License! The unlicensed library is: WF_WireQueue-MQTT.lvlib:Messaging.lvclass
+  ```
+
+  Working: `Successful in opening license file`, `pp_eztrial1() ... status : 2`,
+  and zero `Bad License` lines. Two traps in that log. The
+  `SoftwareKey Protection PLUS DLL (KEYLIB32.DLL) is invalid` signature
+  complaints are **noise** — `KEYLIB64.dll` and `SKCA64.dll` carry no signature
+  at all on the developer's machine either, and licensing works there — so do
+  not chase them. And LabVIEW registers the add-on itself
+  (`Writing the attributes of this add-on to the registry ... without any
+  error`, under
+  `HKLM\SOFTWARE\National Instruments\LabVIEW\26.0\PartnerAddons\<Vendor>\`), so
+  `RegisterAddon.exe` is not needed; it exits 3 silently in this container
+  anyway, being another LabVIEW-built helper of the kind that dies here.
+- **The identifier TPLAT binds to is its own 9-digit computer number, not the NI
+  Computer ID.** This corrects an earlier conclusion recorded here. The log
+  reports `Computer Number found to be : 101700461`, which is what NI's offline
+  activation page calls a User Code; `generateComputerId.exe` reports
+  `6RZC-VFFQ-5C7V-TFC5`, which belongs to NI License Manager and is a different
+  system. So "buy an activation for the container's Computer ID" was aimed at
+  the wrong number — and is moot, because the evaluation route needs no
+  activation. What remains true and useful: the value is stable across fresh
+  containers from NI's published images, and `Licensing.log` records
+  `Unknown host id [ffffffff]` from every NILM consumer in the container.
+- **NI support unactivated LabVIEW in containers, and explicitly do not extend
+  that to third-party add-ons.** Headless mode is the supported ephemeral story
+  for LabVIEW itself: `-Headless` on every `LabVIEWCLI` call for 2026 Q1 and
+  later (replacing `EnableCICDFeaturesForLabVIEW=TRUE` in 2025 Q3 and earlier),
+  documented in
+  [ni/labview-for-containers](https://github.com/ni/labview-for-containers/blob/main/docs/headless-labview.md)
+  as running "without requiring activation", for non-development use only. On
+  the licensing side the LabVIEW EULA has covered CI/CD use since August 2021,
+  and VLA holders add free part number `786474-35` so a build machine does not
+  consume a development seat. For add-ons NI say the opposite: "NI does not
+  provide activation keys for third-party add-ons ... it is the responsibility
+  of the third-party add-on developer", and there is no NI-supported switch that
+  disables a TPLAT check. The 30-day evaluation is therefore the only
+  vendor-sanctioned path that works unattended, and a container that is
+  destroyed each run never reaches day 31 — worth agreeing with each vendor
+  rather than assuming, and WireFlow are the ones to ask about a build-server
+  licence.
+- **Licensing is now genuinely settled, and it is not the project's 1394.** With
+  every vendor's shipped `.lf` seeded, the same project run reports
+  **254 of 1648** and **zero** `Bad License` lines, against 251–252 before. So
+  the licence gating was real, is fixed, and accounts for about two of the
+  project's own VIs — the 199 it unbroke are all inside
+  `vi.lib\addons\WireFlow`. Keep the seeding: it is correct, it is cheap, and it
+  removes a whole class of false diagnosis. But stop treating licensing as a
+  candidate explanation for the bulk. `vi.lib\GPower` — also TPLAT-licensed —
+  analysed **1163 of 1163 passing** even before this, so the container was never
+  globally broken for licensed vendor libraries. The measurement still worth
+  taking is `vi.lib\SEF Energy` with the licences seeded: it was 697 of 946, and
+  63 of its failures were in the WireFlow-dependent `fs-net-com`, so that number
+  should move even though the project's did not.
 - **The per-user LabVIEW configuration is exhausted too: 252, byte-identical.**
   This was the last dimension no replication had touched. Copying the whole of
   `Documents\LabVIEW Data` (1219 files, 10.8 MB, caches excluded) into the
@@ -326,6 +374,72 @@ Key packages:
   the files are not cloud-only placeholders (no `Offline` or
   `RecallOnDataAccess` attribute on any of them), so checking for that
   attribute does not predict this.
+- **Mass Compile on ONE library is the diagnostic that finally names things, and
+  it is the tool to reach for first.** VI Analyzer only ever says "This VI is
+  broken", which is why days went into measuring aggregates. Mass Compile logs
+  the actual unresolved item and its caller:
+
+  ```
+  Search failed to find "niEioResolveResourceRelativePath.vi" previously from
+    "<vilib>:\eio\utilities\niEioResolveResourceRelativePath.vi"
+  Search failed to find "FS-NET.lvclass:FS-Net Config.ctl" previously from
+    "..\..\Dropbox (Personal)\CG\Downing\.FS Utils\FS-NET\FS-Net Config.ctl"
+    +=+ Caller: "Read Pads MQTT.vi"
+  ```
+
+  This does not contradict the note above that Mass Compile hangs on the
+  project — it still does, re-measured at 45 minutes without even reaching
+  `#### Starting Mass Compile`. The difference is not size but **location**: a
+  library inside `vi.lib`, where its dependencies do exist, completes in about a
+  minute (`fs-choke-actuator`, 52 VIs) and the whole of `vi.lib\SEF Energy`
+  (850 VIs) in 8.8 minutes, whereas a single project module hangs exactly like
+  the whole project does (`_Code\Valve`, 140 VIs, 20 minutes, no output). So the
+  project carries references that send LabVIEW searching the disk and the
+  installed libraries largely do not — which is itself worth knowing, and means
+  this diagnostic only works against `vi.lib`. Point it at one library there,
+  read the names, fix, repeat. Note it
+  rewrites the VIs it compiles, so aim it at the container's own copy of
+  `vi.lib` or at a throwaway copy of the project, never at `fsic2`.
+- **The first named cause: `nilvfpgahostcomm` was missing, and adding it fixes
+  the actuator libraries' unresolved dependency.** `<vilib>:\eio\utilities\...`
+  resolves through the LVAddons merge, and `niEioResolveResourceRelativePath.vi`
+  lives only in `LVAddons\nilvfpgahostcomm` (and its 32/64 twins) — not in
+  `LabVIEW 2026\vi.lib`, so no amount of copying the LabVIEW folder could ever
+  supply it. With the eight driver add-ons plus `nilvfpgahostcomm`, Mass Compile
+  of `fs-choke-actuator` completes with **no** search failures and LabVIEW stays
+  healthy. Adding the wider RIO family alongside it
+  (`crio`, `rseries`, `nirio`, `fpgasr`, `rio_pt` and their bitness twins)
+  brings back the wedge — VI Server listens but `LabVIEWCLI` gets `-350000` —
+  so add `nilvfpgahostcomm` alone and bisect before adding more.
+- **Some of these dependencies are missing on the developer's machine too, so
+  the container is faithfully reproducing a broken install.** Of the items
+  `vi.lib\SEF Energy` fails to resolve, `vi.lib\FS Configure` does not exist on
+  the host at all and `vi.lib\SEF Energy\FS Utils\GPS Receiver` is an **empty
+  directory** there, its `GPS Receiver.lvlib` absent. One reference is worse
+  than missing: `Read Pads MQTT.vi`, installed under `vi.lib`, still points at
+  `..\..\Dropbox (Personal)\CG\Downing\.FS Utils\FS-NET\FS-Net Config.ctl` —
+  a saved link out of `vi.lib` into the developer's own working copy, which is
+  unresolvable anywhere but his machine and is not even valid there now. Before
+  blaming the container for a broken dependency, check whether the file exists
+  on the host.
+- **The broken libraries are the Actor Framework ones, but the Actor Framework
+  is not the cause.** The correlation is near-perfect — `fs-net-com` (83 AF
+  references, 63 of 70 broken), `fs-tx-actuator` (78, 33 of 69),
+  `fs-choke-actuator` (61, 51 of 52), `fs-daq-logger` (51, 51 of 53),
+  `fs-vx-actuator` (43, 24 of 40), against `FS Utils` (0 AF, 23 of 245) and
+  `IP Camera` (0 AF, 2 of 89) — but `vi.lib\ActorFramework` itself analyses
+  **131 of 131 clean** in the container. The AF libraries are simply the
+  networked, hardware-facing ones. Note the stock image ships 144 AF files to
+  the host's 156, the difference being the `Proxy Actor`, `Upper Proxy Actor`
+  and `Lower Proxy Actor` directories, but `Actor Framework.lvlib` is
+  byte-identical between the two and declares none of them, so that gap is not
+  a break either.
+- **Within a broken library, look at which VIs pass.** In `fs-choke-actuator`
+  the single passing VI is `Scale Choke.vi`, pure computation, while every data
+  accessor (`Write Config.vi`, `Write Set Point.vi`) and every message `Do.vi`
+  fails — the signature of a broken class private data control rather than a
+  broken subVI. Remember VI Analyzer only analyses VIs, so a broken `.ctl`
+  never appears in the report while breaking everything that uses it.
 - **`LabVIEWCLI` writing to stderr aborts the harness *after* the report is
   written.** With `$ErrorActionPreference = 'Stop'`, PowerShell turns the CLI's
   `Operation output:` on stderr into a terminating `NativeCommandError`, so the

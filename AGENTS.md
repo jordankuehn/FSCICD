@@ -277,7 +277,7 @@ Key packages:
   `ProgramData\National Instruments\Partners\WireFlow\Licenses\`. It is what a
   real VIPM install puts there, and NI's tutorials state that a registered
   add-on "will start off in evaluation mode" with the run arrow unbroken. See
-  `seed-eval-licences.ps1`, which walks every `.lf` under `vi.lib` and places it
+  `docker/seed-eval-licences.ps1`, which walks every `.lf` under `vi.lib` and places it
   under its vendor. The activated copy is worse than useless — it is bound to
   the activating machine's TPLAT computer number, so it fails to open AND no
   evaluation begins.
@@ -367,6 +367,21 @@ Key packages:
   What is left is four libraries broken at 97–100% with everything else clean,
   which is the broken class private data control signature, not a missing
   dependency spread thinly.
+- **Mass Compile with licences seeded splits the remainder into two buckets.**
+  `fs-choke-actuator` compiles **clean** (zero Search failed, operation
+  succeeded) yet VI Analyzer still reports 51 of 52 broken — missing-file
+  diagnosis is exhausted there; the failure is inside the class private data
+  (`.ctl`) or a type LabVIEW will not name from Mass Compile. `fs-net-com` names
+  two unresolved items despite the targets existing on the host:
+  `FS-NET.lvclass:FS-Net Config.ctl` (caller `FS-NET COM.ctl`) and
+  `FS-NET.lvclass:Package Data and Topic.vi` (caller `Pub Meta Data.vi`), plus
+  `TCP_NoDelay_VxWorks.vi` under WireFlow as a Bad subVI. `fs-daq-logger` names
+  exactly two Bad VIs: `Read local DAQ Queue 2.vi` and `Write local DAQ Queue.vi`.
+  `FS Valve Interface` Mass Compile names eleven Bad VIs (`RX Calibration
+  Factors`, `Spin Up TXActuator`, `Spin Up VXActuator`, …) with zero Search
+  failed even though `fs-tx-actuator` and `fs-vx-actuator` now analyse clean —
+  so the valve layer's breakage is a stale or mismatched type reference inside
+  that library, not a missing actuator install.
 - **The per-user LabVIEW configuration is exhausted too: 252, byte-identical.**
   This was the last dimension no replication had touched. Copying the whole of
   `Documents\LabVIEW Data` (1219 files, 10.8 MB, caches excluded) into the

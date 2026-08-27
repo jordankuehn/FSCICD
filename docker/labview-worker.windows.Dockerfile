@@ -50,6 +50,8 @@ ENV LABVIEW_VERSION=${LABVIEW_VERSION} `
 # Staged, not executed. The installer runs later in a container, because a build
 # step cannot start the VIPM engine (see the note above).
 COPY docker/vipm/ C:/vipm/
+COPY docker/seed-eval-licences.ps1 C:/fscicd/seed-eval-licences.ps1
+COPY docker/seed-eval-licences.ps1 C:/vipm/seed-eval-licences.ps1
 
 RUN if (-not (Get-ChildItem -Path 'C:\vipm' -Filter '*.vipc' -ErrorAction SilentlyContinue)) { `
       throw 'No .vipc found in C:\vipm. Copy the project configuration into docker/vipm/ before building.' `

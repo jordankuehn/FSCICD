@@ -31,4 +31,24 @@ if (-not (Test-Path $installer)) { throw "install-vipc.ps1 was not found in $Wor
 
 $Env:VIPC_DIR = $Work
 & $installer
-exit $LASTEXITCODE
+$installExit = $LASTEXITCODE
+
+# TPLAT add-ons need the vendor's as-shipped .lf under Partners or every VI in
+# the library is broken. Run after VIPM install (or after any vi.lib copy).
+$seed = @(
+    (Join-Path $Work 'seed-eval-licences.ps1'),
+    'C:\fscicd\seed-eval-licences.ps1'
+) | Where-Object { Test-Path $_ } | Select-Object -First 1
+
+if ($seed) {
+    Write-Host ''
+    Write-Host "=== seeding TPLAT evaluation licences ($seed) ==="
+    & $seed
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "seed-eval-licences.ps1 exited $LASTEXITCODE"
+    }
+} else {
+    Write-Warning 'seed-eval-licences.ps1 not found — TPLAT add-ons may analyse as broken'
+}
+
+exit $installExit

@@ -114,6 +114,20 @@ docker commit fscicd-vipm-install fscicd-labview:2026q3-windows
 docker rm fscicd-vipm-install
 ```
 
+`install-in-container.ps1` runs `seed-eval-licences.ps1` after the VIPM install.
+That copies each vendor's **as-shipped** `.lf` from `vi.lib` into
+`ProgramData\National Instruments\Partners\<Vendor>\Licenses\`, which puts
+TPLAT add-ons into their 30-day evaluation. Without this step, licensed
+libraries analyse as broken even when the files are present. Do **not** copy a
+developer machine's activated `Partners` tree instead — those files are bound
+to the host's TPLAT computer number and fail to open in a container.
+
+To run the seed step alone on an image that already has packages in `vi.lib`:
+
+```powershell
+docker run --rm fscicd-labview:2026q3-windows powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File C:\fscicd\seed-eval-licences.ps1
+```
+
 ## 3. Point FSCICD at it
 
 ```yaml

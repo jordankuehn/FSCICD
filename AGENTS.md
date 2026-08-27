@@ -342,10 +342,31 @@ Key packages:
   removes a whole class of false diagnosis. But stop treating licensing as a
   candidate explanation for the bulk. `vi.lib\GPower` — also TPLAT-licensed —
   analysed **1163 of 1163 passing** even before this, so the container was never
-  globally broken for licensed vendor libraries. The measurement still worth
-  taking is `vi.lib\SEF Energy` with the licences seeded: it was 697 of 946, and
-  63 of its failures were in the WireFlow-dependent `fs-net-com`, so that number
-  should move even though the project's did not.
+  globally broken for licensed vendor libraries.
+- **In the dependency layer the fix is worth 76 VIs, and it clears two whole
+  libraries — but not the ones the WireFlow correlation predicted.**
+  `vi.lib\SEF Energy` re-measured with the licences seeded (and the driver
+  add-ons plus `nilvfpgahostcomm`, so the two causes are not separated) gives
+  **782 of 1056**, per library:
+
+  | library             | VIs | broken before | broken now |
+  | ------------------- | --- | ------------- | ---------- |
+  | `fs-tx-actuator`    |  69 |            33 |      **0** |
+  | `fs-vx-actuator`    |  40 |            24 |      **0** |
+  | `FS Utils`          | 245 |            23 |      **4** |
+  | `fs-net-com`        |  70 |            63 |         63 |
+  | `fs-choke-actuator` |  52 |            51 |         51 |
+  | `fs-daq-logger`     |  53 |            51 |         51 |
+  | `FS Valve Interface`| 102 |   not present |        102 |
+
+  Note `fs-net-com` is unchanged at **exactly 63**, so the WireFlow dependency
+  was never why it was broken, despite being the library the correlation
+  pointed at — that hypothesis is dead. `FS Valve Interface` is new to the
+  measurement rather than a regression; it accounts for most of the rise from
+  946 analysed to 1056, and the host tree it was copied from had it all along.
+  What is left is four libraries broken at 97–100% with everything else clean,
+  which is the broken class private data control signature, not a missing
+  dependency spread thinly.
 - **The per-user LabVIEW configuration is exhausted too: 252, byte-identical.**
   This was the last dimension no replication had touched. Copying the whole of
   `Documents\LabVIEW Data` (1219 files, 10.8 MB, caches excluded) into the

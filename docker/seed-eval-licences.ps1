@@ -10,7 +10,7 @@
       C:\ProgramData\National Instruments\Partners\<Vendor>\Licenses\
 
     Without it, LabVIEW logs "Error opening license file", pp_eztrial1() returns
-    status 0, and every VI in the library is broken — even though NI's Standard
+    status 0, and every VI in the library is broken - even though NI's Standard
     Mode documentation says a registered add-on "will start off in evaluation
     mode" with the run arrow unbroken.
 
@@ -42,7 +42,7 @@ $lfs = @(Get-ChildItem $viLib -Recurse -Filter '*.lf' -File -ErrorAction Silentl
 Write-Host "=== TPLAT licence seeding ($($lfs.Count) as-shipped .lf under vi.lib) ==="
 
 if ($lfs.Count -eq 0) {
-    Write-Host '   nothing to seed — vi.lib contains no .lf files yet'
+    Write-Host '   nothing to seed - vi.lib contains no .lf files yet'
     exit 0
 }
 
@@ -70,3 +70,4 @@ Write-Host ''
 Write-Host "=== done: $seeded seeded, $skipped already present ==="
 Get-ChildItem $partners -Recurse -File -ErrorAction SilentlyContinue |
     ForEach-Object { Write-Host ('   {0}' -f $_.FullName.Replace($partners + '\', '')) }
+exit 0

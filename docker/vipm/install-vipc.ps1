@@ -24,10 +24,13 @@
                         For diagnosis only: the resulting image analyses a
                         project whose dependencies are incomplete, which reports
                         breakage that says nothing about the code.
-      VIPM_SKIP_PREFLIGHT=1
-                        Attempt the installs even when the VIPM File Handler
-                        preflight says the stack cannot answer. Only useful for
-                        re-testing a container whose VIPM has been changed.
+      VIPM_RUN_PREFLIGHT=1
+                        Run the (diagnostic-only) VIPM File Handler probe. Off
+                        by default: it does not predict install failure, and
+                        running it against a live engine can wedge the engine.
+      VIPM_BATCH_SIZE   Packages per install chunk (default 10). A single
+                        144-file batch timed out at 874 s; chunks keep each
+                        VIPM_TIMEOUT window useful.
 #>
 
 $ErrorActionPreference = 'Stop'
@@ -45,18 +48,47 @@ $LabVIEWBitness = if ($Env:LABVIEW_BITNESS) { $Env:LABVIEW_BITNESS } else { '64'
 $Env:VIPM_NONINTERACTIVE = '1'
 $Env:VIPM_ASSUME_YES     = '1'
 $Env:NO_COLOR            = '1'
-if (-not $Env:VIPM_DEBUG) { $Env:VIPM_DEBUG = '1' }
+# VIPM_DEBUG is deliberately NOT defaulted on: the working configuration was
+# measured without it, and every difference from that configuration has at some
+# point turned out to matter.
 
 # VIPM_COMMUNITY_EDITION is deliberately NOT set. Forcing it turns on VIPM's
 # public-Git-repository entitlement gate, which fails inside a sealed build
 # layer with exit 6. Left unset, the CLI still runs as Community Edition and
 # installs without a Pro licence.
 
-# VIPM shortens its timeouts when it does not believe it is in CI, and those
-# desktop defaults can abort a cold headless LabVIEW mid-handshake.
-if (-not $Env:CI)             { $Env:CI = 'true' }
-if (-not $Env:GITHUB_ACTIONS) { $Env:GITHUB_ACTIONS = 'true' }
+# Explicit timeouts rather than CI=true env hints (the hints change other CLI
+# behaviour too, and the measured-working configuration ran without them). The
+# liveliness timeout matters separately from the operation timeout: a first
+# install into a cold headless LabVIEW can sit silent well past the CLI's 60 s
+# default while LabVIEW mass compiles the package, and the CLI then reports
+# "made no progress" and gives up on an install that was working.
 if (-not $Env:VIPM_TIMEOUT)   { $Env:VIPM_TIMEOUT = '900' }
+if (-not $Env:VIPM_DESKTOP_LIVELINESS_TIMEOUT) { $Env:VIPM_DESKTOP_LIVELINESS_TIMEOUT = '900' }
+
+# The VIPM Desktop engine is itself a LabVIEW-runtime app: under a global
+# LV_RTE_HEADLESS=1 (which the NI base image bakes into ENV for CI-time
+# LabVIEWCLI use) it runs but never completes the CLI's startup handshake, and
+# every operation dies at "wait for VIPM startup". Clearing it here affects only
+# this process tree; the image ENV that runtime workflows rely on is untouched.
+# (LCWC hit the same failure for three weeks in Aug 2026 - see their docs, s.15.)
+if ($Env:LV_RTE_HEADLESS) {
+    Write-Host "Clearing LV_RTE_HEADLESS=$($Env:LV_RTE_HEADLESS) for the VIPM install."
+    Remove-Item Env:LV_RTE_HEADLESS -ErrorAction SilentlyContinue
+}
+
+# The engine's package-list refresh alone peaks over 1.3 GB on LabVIEW 2026 Q3,
+# and a memory-capped container (hyperv-isolated Windows containers default to
+# 1 GB) starves it into the identical "wait for VIPM startup" wedge. Fail fast
+# with the fix rather than spending three 15-minute timeouts learning it.
+$visibleGB = [math]::Round((Get-CimInstance Win32_OperatingSystem).TotalVisibleMemorySize / 1MB, 1)
+Write-Host "Container visible memory: $visibleGB GB"
+if ($visibleGB -lt 2.5 -and $Env:VIPM_ALLOW_LOW_MEMORY -ne '1') {
+    throw ("Only $visibleGB GB of memory is visible in this container, and the VIPM stack " +
+           '(headless LabVIEW + VIPM Desktop engine + CLI) needs well over 2 GB - the engine ' +
+           'will hang at "wait for VIPM startup". Re-run with docker run -m 8GB (hyperv-isolated ' +
+           'Windows containers default to 1 GB), or set VIPM_ALLOW_LOW_MEMORY=1 to proceed anyway.')
+}
 
 # --- Locate the VIPM CLI -----------------------------------------------------
 # Prefer the modern CLI (JKI\VIPM) over the legacy LabVIEW-based one, which has
@@ -99,11 +131,14 @@ $script:LabVIEWTargetVersion = '{0}.{1} ({2}-bit)' -f
     (Get-Item $LabVIEWExe).VersionInfo.ProductMinorPart,
     $LabVIEWBitness
 
-# The quarter identifies the active target; the year identifies the installed
-# LabVIEW in the target list. See Set-VipmSettings for why the two differ.
-$script:LabVIEWYearVersion = '{0}.0 ({1}-bit)' -f
-    (Get-Item $LabVIEWExe).VersionInfo.ProductMajorPart,
-    $LabVIEWBitness
+# The quarter identifies the target everywhere. An earlier revision put the
+# YEAR (26.0) in "Versions 0" and the quarter in "Active Target.Version",
+# following JKI's guidance in vipm-io/vipm-desktop-issues#126 - but the engine
+# looks the active target up in the [Targets] list by version, and a mismatched
+# pair leaves its installs sitting at "0.0% - Connecting to LabVIEW" forever.
+# The quarter in BOTH is the form LCWC's working Windows bakes use; CLI
+# auto-detection is covered by passing --labview-version/--labview-bitness
+# explicitly on every install (see $GlobalFlags).
 
 function Test-VipmSettings {
     <#
@@ -114,7 +149,11 @@ function Test-VipmSettings {
     #>
     if (-not (Test-Path $VipmSettings)) { return $false }
     if ((Get-Item $VipmSettings).Length -eq 0) { return $false }
-    return ((Get-Content -Path $VipmSettings -Raw) -match 'Active Target\.Name')
+    $raw = Get-Content -Path $VipmSettings -Raw
+    if ($raw -notmatch 'Active Target\.Name') { return $false }
+    # A file from the old seeding (year in "Versions 0", quarter in the active
+    # target) leaves the engine unable to find its target; re-seed it.
+    return ($raw -match [regex]::Escape('Versions 0="' + $script:LabVIEWTargetVersion + '"'))
 }
 
 function Set-VipmSettings {
@@ -123,14 +162,12 @@ function Set-VipmSettings {
     # The INI wants the executable as "/C/Program Files/.../LabVIEW.exe".
     $lvIniPath = '/' + (($LabVIEWExe -replace ':', '') -replace '\\', '/')
 
-    # Key set and conventions from JKI's own container guidance in
-    # vipm-io/vipm-desktop-issues#126. Two details matter:
+    # Key set and conventions from LCWC's working Windows bakes (their
+    # install-vipc.ps1), plus JKI's container guidance in
+    # vipm-io/vipm-desktop-issues#126:
     #
-    #   * "Versions 0" carries the YEAR version (26.0) while
-    #     "Active Target.Version" carries the QUARTER (26.3). Using the quarter
-    #     for both leaves the CLI unable to detect a target at all - it reports
-    #     "Failed to detect LabVIEW version automatically". With the year in
-    #     place it reports "Auto-detected LabVIEW 2026 (64-bit)".
+    #   * The QUARTER version (26.3) goes in "Versions 0" AND
+    #     "Active Target.Version" - see the comment above Set-VipmSettings.
     #   * "LVTN TOS Agreed MD5" pre-accepts the LabVIEW Tools Network terms.
     #     Unaccepted terms are one of the things that can leave a GUI-less VIPM
     #     waiting on a dialog nobody can see.
@@ -149,7 +186,7 @@ IsFirstLaunch="FALSE"
 Names.<size(s)>="1"
 Names 0="LabVIEW"
 Versions.<size(s)>="1"
-Versions 0="$script:LabVIEWYearVersion"
+Versions 0="$script:LabVIEWTargetVersion"
 Locations.<size(s)>="1"
 Locations 0="$lvIniPath"
 Ports="<size(s)=1> 3363"
@@ -193,14 +230,8 @@ $ErrorActionPreference = 'Continue'
 # both are started here. Without a live LabVIEW the CLI fails with "IO error:
 # Failed to load".
 #
-# Starting the engine is not sufficient, and a healthy engine is not evidence
-# of a healthy stack: the engine opens no listening port and the CLI reaches it
-# by launching "VIPM File Handler.exe" against a pair of temp files. That
-# helper is what actually fails here - see Test-VipmFileHandler.
-$script:VipmEngineExe = @(
-    (Join-Path $VipmDir 'VI Package Manager.exe'),
-    'C:\Program Files (x86)\JKI\VI Package Manager\VI Package Manager.exe'
-) | Where-Object { Test-Path $_ } | Select-Object -First 1
+# The engine must be started BY THE CLI, never pre-launched here - see
+# Start-VipmEngine for the measurement.
 
 function Start-HeadlessLabVIEW {
     Write-Host 'Launching headless LabVIEW for VIPM ...'
@@ -221,34 +252,19 @@ function Start-HeadlessLabVIEW {
 }
 
 function Start-VipmEngine {
-    if (-not $script:VipmEngineExe) {
-        Write-Warning 'The VIPM engine executable was not found; the CLI will try to start it itself.'
-        return
-    }
-    if (Get-Process -Name 'VI Package Manager' -ErrorAction SilentlyContinue) {
-        Write-Host 'VIPM engine is already running.'
-        return
-    }
-    Write-Host "Pre-launching the VIPM engine so the CLI can attach: $script:VipmEngineExe"
-    $proc = Start-Process -FilePath $script:VipmEngineExe -PassThru
-    Start-Sleep -Seconds $script:EngineStartupSeconds
-    # Report whether it survived. An engine that exits immediately produces the
-    # same "wait for VIPM startup" timeout as one that is merely slow, and the
-    # two need completely different fixes.
-    if ($proc.HasExited) {
-        Write-Warning ("  The VIPM engine exited immediately (code $($proc.ExitCode)). " +
-                       'Every install will now time out waiting for it.')
-    } elseif (Get-Process -Name 'VI Package Manager' -ErrorAction SilentlyContinue) {
-        Write-Host "  VIPM engine is running after $($script:EngineStartupSeconds)s."
+    # Deliberately does NOT pre-launch "VI Package Manager.exe". A manually
+    # started engine is the difference between wedging and working here: with a
+    # pre-launched engine, `vipm refresh --force` times out at "wait for VIPM
+    # startup" (measured twice, 2026-09-22, LCWC base image); with the CLI left
+    # to start the engine itself, the identical refresh completed in under two
+    # minutes, four times out of four. The CLI evidently needs to observe the
+    # engine's own startup signal, which an already-running engine never emits.
+    $running = Get-Process -Name 'VI Package Manager' -ErrorAction SilentlyContinue
+    if ($running) {
+        Write-Host 'VIPM engine is already running; the CLI will attach or restart it as it sees fit.'
     } else {
-        Write-Warning '  The VIPM engine process is no longer present after launch.'
+        Write-Host 'VIPM engine not started here on purpose - the CLI starts it itself (pre-launching it wedges the handshake).'
     }
-
-    # No re-seed of Settings.ini here on purpose. Launching the engine was once
-    # suspected of clearing the file, but a seeded 505-byte file survives a full
-    # engine launch untouched; the zero-byte Settings.ini that prompted the
-    # suspicion is written by the CLI when the file is absent altogether, which
-    # the seeding above already prevents.
 }
 
 function Test-VipmFileHandler {
@@ -269,8 +285,16 @@ function Test-VipmFileHandler {
         failure, which no amount of waiting will.
     #>
 
-    if ($Env:VIPM_SKIP_PREFLIGHT -eq '1') {
-        Write-Host 'Skipping the VIPM File Handler preflight (VIPM_SKIP_PREFLIGHT=1).'
+    # Opt-in only. Beyond being a poor predictor (see below), running this probe
+    # against an already-running engine appears to WEDGE the engine: it submits
+    # a command that never completes (LVStatus.txt logs a recursive LEIF load
+    # inside the helper), and the engine seems to process commands serially, so
+    # the following refresh starves at "wait for VIPM startup". Measured
+    # 2026-09-22 in the LCWC base image: with this probe, refresh timed out at
+    # 900 s twice; without it, the identical refresh completed in under 2 min
+    # four times out of four.
+    if ($Env:VIPM_RUN_PREFLIGHT -ne '1') {
+        Write-Host 'Skipping the VIPM File Handler probe (set VIPM_RUN_PREFLIGHT=1 to run it; it can wedge the engine).'
         return
     }
 
@@ -308,8 +332,13 @@ function Test-VipmFileHandler {
         return
     }
 
-    # No return file. Report the exit code and whatever LabVIEW logged, then
-    # stop: continuing only spends the timeout to learn the same thing.
+    # No return file. This was once treated as fatal, but it is NOT load-bearing:
+    # in a container where this exact probe fails, the CLI's own operations
+    # (refresh, library add, package_set_install) complete once the stack is set
+    # up per the recipe above - measured 2026-09-22, oglib_boolean installed
+    # end-to-end with this helper still answering nothing. Whatever IPC the
+    # helper exercises is not the one the modern CLI depends on. Warn and carry
+    # on; the real verdict comes from the installs themselves.
     $detail = if ($proc.ExitCode -eq -1073741819) {
         'crashed with 0xC0000005 (access violation)'
     } else {
@@ -320,15 +349,8 @@ function Test-VipmFileHandler {
             Where-Object { $_.Trim() }) -join ' | ')
     } else { '' }
 
-    # exit rather than throw: this runs with $ErrorActionPreference = 'Continue'
-    # so the native VIPM commands can be driven off exit codes.
-    Write-Error ("VIPM cannot install anything in this image: the VIPM File Handler $detail, " +
-                 'so it never wrote its return file and the CLI would wait for that file until ' +
-                 'every operation timed out ("wait for VIPM startup"). This is a fault inside ' +
-                 "JKI's own LabVIEW-built helper, not a configuration problem - LabVIEWCLI and " +
-                 'the .NET Framework are both healthy in the same container. See docker/README.md ' +
-                 "for the evidence and the upstream reports.$lvStatus")
-    exit 1
+    Write-Warning ("The VIPM File Handler $detail. This helper's failure does not predict " +
+                   "install failure (the modern CLI does not depend on it); continuing.$lvStatus")
 }
 
 # A cold engine occasionally never completes its startup handshake and stays
@@ -337,7 +359,6 @@ function Test-VipmFileHandler {
 $script:EngineWedged   = $false
 $script:RestartsUsed   = 0
 $script:MaxRestarts    = if ($Env:VIPM_MAX_ENGINE_RESTARTS -match '^\d+$') { [int]$Env:VIPM_MAX_ENGINE_RESTARTS } else { 2 }
-$script:EngineStartupSeconds = if ($Env:VIPM_ENGINE_STARTUP_SECONDS -match '^\d+$') { [int]$Env:VIPM_ENGINE_STARTUP_SECONDS } else { 45 }
 
 function Restart-VipmStack {
     Write-Warning ("  VIPM engine wedged; restarting the stack (attempt $($script:RestartsUsed)/$($script:MaxRestarts)) ...")
@@ -411,7 +432,7 @@ function Get-VipcPackageSpecs([string] $VipcPath) {
 
 # A .vipc that bundles its packages carries the .vip payloads inside the zip.
 # Extracting them lets the installer reference the files directly, which is the
-# only way to install a package published on no VIPM repository — an in-house
+# only way to install a package published on no VIPM repository - an in-house
 # library, for instance.
 function Expand-BundledPackages([string] $VipcPath, [string] $Destination) {
     Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
@@ -450,50 +471,69 @@ foreach ($item in $plan) {
         Write-Host "$($item.Vipc.Name) bundles no package files; its packages must be resolved by name."
     }
 }
-$needsIndex = @($plan | Where-Object { $_.Bundled.Count -eq 0 }).Count -gt 0
 
 Start-HeadlessLabVIEW
 Start-VipmEngine
 Test-VipmFileHandler
 
-if ($needsIndex) {
-    # A plain refresh reports success while downloading nothing, leaving an empty
-    # resolver index so every package resolves as "not found" (exit 3).
-    Write-Host 'Refreshing VIPM package sources (refresh --force) ...'
+# Refresh ALWAYS, even when every package is bundled as a local file. This is
+# not about the resolver index (local-file installs need none): the engine's
+# library operations wedge at "wait for VIPM startup" until one refresh has
+# completed, and work immediately afterwards - measured 2026-09-22 in the same
+# container, "Adding 144 local packages" timed out at 900 s without a refresh
+# and "Adding 1 local package" succeeded in seconds after one. A forced refresh
+# also matters when the index IS needed: a plain refresh reports success while
+# downloading nothing, leaving every by-name package "not found" (exit 3).
+Write-Host 'Refreshing VIPM package sources (refresh --force) ...'
+& $VipmExe refresh --force 2>&1 | Out-Host
+if ($LASTEXITCODE -ne 0) {
+    # Refresh is the first real engine health check; a cold-start race gets one
+    # stack restart before we conclude anything (LCWC does the same).
+    Write-Warning "  Refresh failed (exit $LASTEXITCODE); restarting the VIPM stack and retrying once."
+    $script:RestartsUsed++
+    Restart-VipmStack
     & $VipmExe refresh --force 2>&1 | Out-Host
     if ($LASTEXITCODE -ne 0) {
-        Write-Warning "  Refresh failed (exit $LASTEXITCODE); version-pinned installs may still resolve from cache."
+        Write-Warning "  Refresh failed again (exit $LASTEXITCODE); library operations will likely wedge."
     }
-} else {
-    # Installing from file needs no index, and skipping the refresh avoids
-    # spending a whole VIPM_TIMEOUT on it before the first install is attempted.
-    Write-Host 'Every configuration bundles its packages, so no package-source refresh is needed.'
 }
 
 # Install a set of targets - either local .vip paths or name@version specs -
-# as one batch, falling back to one at a time so the log names what failed.
+# in chunks, falling back to one at a time so the log names what failed.
+# A single 144-file batch timed out at 874 s after a healthy refresh
+# (2026-09-22); one package installs in seconds, so chunk size is the lever.
 # Returns the targets that did not install.
 function Install-Targets {
     param([string[]] $Targets, [string] $Label)
 
     if (-not $Targets -or $Targets.Count -eq 0) { return @() }
-    Write-Host "  Installing $($Targets.Count) $Label as one batch ..."
-    if ((Invoke-Vipm @Targets) -eq 0) { return @() }
 
-    Write-Host "  Batch install failed; retrying one at a time to identify the failures ..."
+    $batchSize = if ($Env:VIPM_BATCH_SIZE -match '^\d+$' -and [int]$Env:VIPM_BATCH_SIZE -gt 0) {
+        [int]$Env:VIPM_BATCH_SIZE
+    } else { 10 }
+
     $failures = New-Object System.Collections.Generic.List[string]
-    foreach ($target in $Targets) {
-        if ($script:EngineWedged) {
-            Write-Warning '  Engine wedged; abandoning the remaining targets.'
-            foreach ($remaining in $Targets) {
-                if (-not $failures.Contains($remaining)) { $failures.Add($remaining) }
-            }
-            break
+    $total = $Targets.Count
+    for ($offset = 0; $offset -lt $total; $offset += $batchSize) {
+        $end = [Math]::Min($offset + $batchSize, $total) - 1
+        $chunk = @($Targets[$offset..$end])
+        $n = $chunk.Count
+        Write-Host ("  Installing {0} {1} (items {2}-{3} of {4}) ..." -f $n, $Label, ($offset + 1), ($end + 1), $total)
+        # One attempt per chunk - retrying a timed-out 10-pack burns another
+        # full VIPM_TIMEOUT; fall through to one-at-a-time instead.
+        if ((Invoke-VipmOnce @chunk) -eq 0) { continue }
+
+        Write-Host '  Chunk failed; retrying those packages one at a time ...'
+        if ($script:EngineWedged -or $script:RestartsUsed -lt $script:MaxRestarts) {
+            $script:RestartsUsed++
+            Restart-VipmStack
         }
-        if ((Invoke-Vipm $target) -ne 0) {
-            $name = if (Test-Path $target) { Split-Path $target -Leaf } else { $target }
-            Write-Warning "  FAILED: $name"
-            $failures.Add($target)
+        foreach ($target in $chunk) {
+            if ((Invoke-Vipm $target) -ne 0) {
+                $name = if (Test-Path $target) { Split-Path $target -Leaf } else { $target }
+                Write-Warning "  FAILED: $name"
+                $failures.Add($target)
+            }
         }
     }
     return @($failures.ToArray())

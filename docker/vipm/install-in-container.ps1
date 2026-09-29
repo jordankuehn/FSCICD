@@ -48,7 +48,7 @@ if ($seed) {
         Write-Warning "seed-eval-licences.ps1 exited $LASTEXITCODE"
     }
 } else {
-    Write-Warning 'seed-eval-licences.ps1 not found — TPLAT add-ons may analyse as broken'
+    Write-Warning 'seed-eval-licences.ps1 not found - TPLAT add-ons may analyse as broken'
 }
 
 exit $installExit

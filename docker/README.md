@@ -9,66 +9,34 @@ only to 255 — copying files is not installing, which also does registry,
 
 This image is intended to install the packages properly, with VIPM.
 
-## Status: blocked by a crash in VIPM's own helper
+## Status (2026-09-28)
 
-**VIPM cannot install packages in NI's 2026 Windows container at all today.**
-`install-vipc.ps1` detects this up front and fails in seconds rather than
-spending the timeout to reach the same conclusion.
+VIPM package installs in NI's 2026 Windows container **work** when the LCWC
+recipe is followed: container memory ≥2.5 GB (`docker run -m 8GB`),
+`LV_RTE_HEADLESS` cleared for the install process tree (image ENV can stay set
+for runtime LabVIEWCLI), JKI `Settings.ini` with year in `Versions 0` and
+quarter in `Active Target.Version`, and `vipm refresh --force` before any
+library operation. Details and the false leads eliminated along the way are in
+`AGENTS.md`.
 
-The VIPM CLI never opens a socket. It reaches VIPM by launching a second
-LabVIEW-built executable with a command name and a pair of temp files, and
-polling for the return file:
+**Working measurement image today:** `fscicd-labview:2026q3-windows-vipm`
+(hand-assembled after a successful install). Do **not** use the committed tag
+`fscicd-labview:2026q3-windows` for analysis — every `LabVIEWCLI` call on that
+image fails with `-350000` even though port 3363 listens. Re-bake and only
+retag `2026q3-windows` after a connect + VIA probe passes. Also avoid
+`2026q3-windows-replica` (host NI/JKI registry hives baked in).
 
-```
-VIPM File Handler.exe -- /command:vipm_status
-  /progress_file:<tmp> /return_file:<tmp>
-```
-
-In this container that helper dies with `0xC0000005` (access violation) two to
-three seconds in, before creating either file. The CLI then polls for a file
-that will never appear until the operation gives up with
-`Operation 'wait for VIPM startup' timed out`. LabVIEW records the fault in
-`%TEMP%\LVStatus.txt`:
-
-```
-Recursive load during LEIF load! ...\VIPM File Handler.exe\JKI Reuse Pool\Windows\
-VIPM - Check is Windows Task Runnning by Name (Scalar).vi is loading ...\System
-```
-
-What that rules out, all measured in the same image:
-
-| Suspect | Finding |
-|---|---|
-| The engine is crashing | No. `VI Package Manager.exe` (which the CLI calls "VIPM Desktop") stays alive and `Responding`, and holds no listening port because it is not meant to |
-| A slow first-launch handshake | No. Watched for 8 minutes: engine idle at 3s CPU, package index untouched, install still failing |
-| Empty `Settings.ini` | Symptom, not cause. The failing CLI creates it when absent; a seeded file survives an engine launch untouched |
-| Missing .NET | No. .NET Framework 4.8 is complete and `System`, `System.Drawing`, `System.Windows.Forms` and `System.IO.Compression.FileSystem` all load fine |
-| Licensing | No. `Valid Activation Code: true`, and JKI document activation as optional for Free/Community |
-| `docker build` vs `docker run` | Irrelevant. Identical failure both ways, so the old window-station theory was wrong |
-| `LV_RTE_HEADLESS=1` | Aggravating only. It turns the fault into a hard crash; unset, the helper exits cleanly but still writes no return file |
-| Broken only for local files | No. By-name installs block on the same helper |
-
-It is specific to LabVIEW-built VIPM components: `VIPM Update Registry.exe` and
-`LabVIEW Tools Network.exe` fail identically, while `JKIUpdate.exe` — the one
-helper that is not a LabVIEW app — exits 0. LabVIEWCLI itself is healthy in the
-same container, which is why analysis works and only installation does not.
-
-Upstream, JKI have an open report of the same class of failure on Linux
-([vipm-desktop-issues#126](https://github.com/vipm-io/vipm-desktop-issues/issues/126)),
-where `vipm-desktop` goes defunct on 2026 images and the reporter notes that
-2025 images install correctly. There is no Windows equivalent to fall back to:
-NI publish no Windows image before 2026 (`2026q1`, `2026q1patch1`,
-`2026q1patch2`, `2026q3`, `latest`), and the working 2025 images are Linux-only.
-
-Until this is fixed upstream, use the stock image and accept the reduced
-analysis coverage, or supply the dependencies by another route.
+Project VIA after overlaying today's fixed host `vi.lib\SEF Energy` packages:
+**189 / 1510**. SEF Energy itself: **783 / 1074**, with
+`fs-tx-actuator` / `fs-vx-actuator` / `fs-systemlink` clean and
+`fs-choke-actuator` / `fs-daq-logger` / `fs-net-com` still the wall. See
+`HANDOFF.md` and the 2026-09-28 remeasure bullet in `AGENTS.md`.
 
 ## Why the install is a run-and-commit rather than a `docker build`
 
-Because the installer needs a live LabVIEW and a live VIPM engine, which is
-awkward inside a single `RUN`, the packages are installed by running a container
-and committing the result — a normal Docker technique for this class of problem.
-The steps below are kept for when the upstream crash is fixed.
+The installer needs a live LabVIEW and a live VIPM engine, which is awkward
+inside a single `RUN`, so packages are installed by running a container and
+committing the result — a normal Docker technique for this class of problem.
 
 ## 1. Stage the tooling
 
@@ -127,6 +95,37 @@ To run the seed step alone on an image that already has packages in `vi.lib`:
 ```powershell
 docker run --rm fscicd-labview:2026q3-windows powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File C:\fscicd\seed-eval-licences.ps1
 ```
+
+## Mass Compile diagnostics
+
+VI Analyzer only says "This VI is broken". To name the actual missing file or bad
+subVI, run Mass Compile on **one library inside vi.lib** — not the whole project,
+which hangs when dependencies are missing (see AGENTS.md).
+
+Mass Compile **rewrites VIs in place**. Aim it only at the container's own
+`vi.lib` copy or a throwaway project copy, never at a bind-mounted developer
+tree.
+
+One library:
+
+```powershell
+docker run --rm -v "C:\temp\out:C:\out" -e LV_RTE_HEADLESS=1 `
+  fscicd-labview:2026q3-windows powershell -NoLogo -NoProfile -ExecutionPolicy Bypass `
+  -File C:\fscicd\masscompile-dir.ps1 `
+  -Directory "C:\Program Files\National Instruments\LabVIEW 2026\vi.lib\SEF Energy\fs-net-com"
+```
+
+Several libraries in one LabVIEW session (`COMPILE_DIRS` or `-Directories`):
+
+```powershell
+docker run --rm -v "C:\temp\out:C:\out" -e LV_RTE_HEADLESS=1 `
+  -e COMPILE_DIRS="C:\Program Files\National Instruments\LabVIEW 2026\vi.lib\SEF Energy\fs-net-com;C:\Program Files\National Instruments\LabVIEW 2026\vi.lib\SEF Energy\fs-choke-actuator" `
+  fscicd-labview:2026q3-windows powershell -NoLogo -NoProfile -ExecutionPolicy Bypass `
+  -File C:\fscicd\masscompile-dir.ps1
+```
+
+Logs land under `C:\out\` (mount `C:\temp\out` on the host). The script seeds TPLAT
+evaluation licences first unless `SKIP_LICENCE_SEED=1`.
 
 ## 3. Point FSCICD at it
 

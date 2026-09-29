@@ -164,7 +164,14 @@ Key packages:
   on the correct port"). Without the import, VI Server is listening on 3363
   **12 seconds** after launch. That kills the "activation/registry state for the
   licence-gated packages" theory as a *practical* route even before asking
-  whether it would have helped.
+  whether it would have helped. **The committed image
+  `fscicd-labview:2026q3-windows-replica` has these hives baked in** — it was
+  committed after this experiment (`HKLM\SOFTWARE\JKI` present, 92 NI subkeys)
+  — so every `LabVIEWCLI` call in it fails with `-350000` even though 3363
+  listens. Do not use that image; delete it or re-commit from a clean
+  replication with `REPLICA_SKIP_REGISTRY=1`. Every successful Mass Compile and
+  VI Analyzer measurement ran on `fscicd-labview:staging` with
+  `replicate-in-container.ps1` re-run at container start.
 - **When something has been added to `vi.lib`, launch LabVIEW yourself and wait
   for port 3363 rather than letting `LabVIEWCLI` launch it.** The CLI's own
   connect window is short and its failure (`-350000`) looks identical to a
@@ -382,6 +389,41 @@ Key packages:
   failed even though `fs-tx-actuator` and `fs-vx-actuator` now analyse clean —
   so the valve layer's breakage is a stale or mismatched type reference inside
   that library, not a missing actuator install.
+- **The `fs-net-com` failure is a library-qualification mismatch in the sources,
+  not a missing or stale file — read the qualified name in the Search failed
+  line literally.** The callers expect `FS-NET.lvclass:FS-Net Config.ctl` with
+  **no `FS-NET.lvlib:` prefix**, and the Mass Compile log does print the prefix
+  when a caller expects one (compare `FS iControl.lvlib:Rx FS-NET FSPi
+  Msg.lvclass:...` in the same log), so its absence is data. Every
+  `FS-NET.lvclass` on the developer machine — vi.lib package, the working copy
+  (`.FS Utils`, since renamed `hideeee FS Utils`), and two 2022/2023-era
+  snapshots — is owned by an `FS-NET.lvlib`, making its qualified name
+  `FS-NET.lvlib:FS-NET.lvclass`, which never matches. Measured exhaustively:
+  force-overlaying the working copy over the container's vi.lib changes
+  nothing, force-refreshing from the host's current vi.lib changes nothing,
+  and the project's own current `_Code\FS-NET COM` (saved 8/25) fails
+  identically — the same two Search failed lines every time. Meanwhile the
+  FS-NET folder itself Mass Compiles **clean** in the container (0 Search
+  failed), so the class is healthy; it is the callers' saved link that names a
+  different identity. The same log names more source rot in `FS-NET COM`:
+  `oldInit.vi` expects a pre-library `Init Msg.lvclass` (unprefixed, again),
+  `Pub Status.vi` links `C:\_Host Code\Controls\Keystone egress.ctl` and
+  `Rx FSV Status.vi` links `Valve:\_Code\Controls\...` — absolute paths from
+  machines/drives that do not exist here. The fix is an IDE session, not a
+  container change: open `FS-NET COM.lvproj`/library on the developer machine,
+  relink those items against the lvlib-qualified class, delete or repair
+  `oldInit.vi`, and resave; the IDE evidently auto-resolves these interactively
+  (which is why the project "loads fine" there) but headless Mass Compile and
+  VI Analyzer will not.
+- **WireFlow's only genuinely broken VIs are its non-Windows platform stubs, by
+  design.** With licences seeded, Mass Compile of the whole of
+  `vi.lib\addons\WireFlow` (238 VIs) reports exactly one Bad VI —
+  `TCP_NoDelay_VxWorks.vi` — plus `TCP_NoDelay_Linux.vi` failing to find
+  `libc.so.6`. Those are the "2 of 216" from the earlier analysis and will be
+  broken on any Windows machine, the developer's included. The `Insane ... in
+  FPHP` lines Mass Compile prints for WireFlow's `Messaging.ctl` and
+  JSONtext's `Get all Object Items (by Offset).vi` are compiler warnings, not
+  failures — both libraries still compile and load.
 - **The per-user LabVIEW configuration is exhausted too: 252, byte-identical.**
   This was the last dimension no replication had touched. Copying the whole of
   `Documents\LabVIEW Data` (1219 files, 10.8 MB, caches excluded) into the
@@ -485,6 +527,18 @@ Key packages:
   its raw text rather than `Add-Content`: if the file lacks a trailing newline,
   `Add-Content` appends the new token onto the end of the last one, which here
   would silently corrupt a `server.tcp.*` setting.
+- **Keep the repo's `.ps1` files pure ASCII.** Windows PowerShell 5.1 reads a
+  UTF-8 file without a BOM as ANSI, so a single em-dash produces parser errors
+  pointing at unrelated lines ("The string is missing the terminator" dozens of
+  lines away). This bit `masscompile-dir.ps1` twice. Also avoid `< > |` even
+  inside single-quoted regex character classes in code that is pasted through
+  `docker run ... -Command`, where a second parse strips the quoting.
+- **`LabVIEWCLI`'s first connect after launching LabVIEW yourself can fail with
+  `-350000` even though 3363 is listening; retry before diagnosing.**
+  `masscompile-dir.ps1` retries up to 4 times, 30 s apart, on that error only.
+  But if it *never* connects, suspect state, not timing: the committed replica
+  image failed all 4 attempts because of its imported registry hives, while a
+  clean staging container connected on attempt 1.
 - **Keep the analysis copy honest.** `C:\temp\fsic` had drifted from the source:
   36 files missing (including five message classes the project's libraries
   declare as members), 24 files present that the source does not have, and 2088
@@ -492,36 +546,217 @@ Key packages:
   nothing here — a re-copied tree scored the same 15% — but every number before
   this was measured against it. Re-copy from source before a measurement that
   matters, and remember the `.viancfg` lives only in the copy.
-- **VIPM cannot install packages in NI's 2026 Windows container at all, and the
-  cause is a crash in JKI's own binaries.** The CLI never opens a socket: it
-  reaches VIPM by launching `VIPM File Handler.exe -- /command:<op>
-  /progress_file:<tmp> /return_file:<tmp>` and polling for the return file. That
-  LabVIEW-built helper dies with `0xC0000005` two to three seconds in, before
-  writing either file, so the CLI polls a file that never appears until the
-  operation reports `Operation 'wait for VIPM startup' timed out`.
-  `%TEMP%\LVStatus.txt` records `Recursive load during LEIF load! ... VIPM -
-  Check is Windows Task Runnning by Name (Scalar).vi is loading ...\System`.
-  `VIPM Update Registry.exe` and `LabVIEW Tools Network.exe` fail the same way;
-  `JKIUpdate.exe`, the only non-LabVIEW helper, exits 0; LabVIEWCLI is healthy in
-  the same container. `install-vipc.ps1` preflights that hop and fails in
-  seconds — do not "fix" it by raising timeouts or restarting the engine.
-  Eliminated, all measured: the engine crashing (it stays alive and
-  `Responding`, and holds no port by design, so `Responding=True` proves
-  nothing); a slow first launch (watched 8 minutes, engine idle at 3s CPU);
-  the zero-byte `Settings.ini` (**written by the failing CLI when the file is
-  absent** — a seeded file survives an engine launch untouched, so the re-seed
-  logic that was added for it has been removed); missing .NET (Framework 4.8 is
-  complete and every assembly the helper loads works from PowerShell);
-  licensing; `docker build` vs `docker run` (identical failure, so the old
-  window-station theory was wrong); and local-file vs by-name installs (both
-  block on the same helper). `LV_RTE_HEADLESS=1` only aggravates it: unset, the
-  helper exits cleanly but still answers nothing. Note `vipm version` is **not**
-  a usable readiness check — it prints `2026.3.0 Free Edition` instantly with no
-  engine running and no `Settings.ini`. JKI have the same class of bug open on
-  Linux ([vipm-desktop-issues#126](https://github.com/vipm-io/vipm-desktop-issues/issues/126)),
-  where 2025 images work and 2026 ones do not; there is no Windows fallback,
-  because NI publish no Windows image before 2026 and the working 2025 images are
-  Linux-only.
+- **VIPM package installs in NI's 2026 Windows container WORK — the month of
+  "cannot install anything" was four stacked environment faults, not a JKI
+  binary bug.** Solved 2026-09-22 by following LCWC's documented recipe
+  ([their docs, section 15](https://elijah286.github.io/LabVIEW-CI-with-Containers/documentation.html);
+  their `install-vipc.ps1` is the reference implementation and this repo's
+  `install-vipc.ps1` now matches). The four causes, each of which alone
+  presents as the same `Operation 'wait for VIPM startup' timed out`:
+  1. **Memory.** This host's Docker defaults to `hyperv` isolation, which caps
+     containers at 1 GB — and the VIPM engine's refresh alone peaks over
+     1.3 GB. Every VIPM attempt in August ran in a 1 GB VM. Run installs with
+     `docker run -m 8GB`; the installer now fails fast below 2.5 GB visible.
+     The `0xC0000005` File Handler crash also stopped reproducing with
+     adequate memory (it exits 0 instead).
+  2. **`LV_RTE_HEADLESS=1` is baked into the NI base image ENV**, and the VIPM
+     Desktop engine is itself a LabVIEW-runtime app that never completes its
+     CLI handshake under a global headless default. Clear the variable for the
+     install's process tree (the installer now does); the image ENV stays for
+     runtime LabVIEWCLI use. This silently broke LCWC's own Windows bakes for
+     three weeks in Aug 2026.
+  3. **`Settings.ini` needs the quarter version in BOTH `Versions 0` and
+     `Active Target.Version`** (`26.3 (64-bit)`), plus the `Locations`/`Ports`
+     keys. The engine looks the active target up in the `[Targets]` list by
+     version, and the earlier year/quarter split left its installs sitting at
+     `0.0% - Connecting to LabVIEW` forever. This corrects the earlier note
+     here that the year belonged in `Versions 0` — that guidance fixed CLI
+     auto-detection, which explicit `--labview-version`/`--labview-bitness`
+     flags cover anyway.
+  4. **`vipm refresh --force` must complete before any library operation, even
+     when every package is bundled locally.** Without it, `Adding 144 local
+     packages to VIPM library` times out at 900 s; after one refresh, a local
+     install completes in seconds (measured same container, same day).
+  Also set `VIPM_DESKTOP_LIVELINESS_TIMEOUT=900` — a first install mass
+  compiles the package inside cold headless LabVIEW and can sit silent past
+  the CLI's 60 s liveliness default while genuinely working. Measured working
+  end-to-end: `oglib_boolean` extract, in-LabVIEW mass compile, palette and
+  menu refresh, `vipm list --installed` reporting it, in 12 s.
+- **The committed bake `fscicd-labview:2026q3-windows` is unusable: every
+  `LabVIEWCLI` call fails with `-350000` although 3363 listens.** The stock
+  NI image, `fscicd-labview:staging` and LCWC's
+  `ghcr.io/elijah286/labview-ci-with-containers-labview-base:2026` all connect
+  first try; only the post-`install-vipc.ps1` commit does not. Bisected on
+  2026-09-23 and **not** caused by anything the packages put on disk:
+  `docker cp`-ing every baked-only tree (22 new `vi.lib` roots, `addons`,
+  `ActorFramework`, `user.lib`, `menus`, `project`, `resource\plugins`,
+  `resource\JKI`, `vi.lib\JKI`, `LabVIEW.ini`) onto a fresh elijah286 base
+  still connects. Nor by `LabVIEW.ini` (17 UI tokens the IDE wrote), the
+  50 MB-larger `VIObjCache`, `resource\JKI\Design Palette\JKI SDP.lvlibp`
+  (its `Recursive load during LEIF load!` is real but harmless here),
+  `HKLM\SOFTWARE\JKI` (byte-identical to the base), `PartnerAddons`, or
+  `LabVIEW\26.0\Type` flipping `Eval` -> `Pro` — each removed or reverted on
+  the broken image with no effect, and the six size-changed overlapping files
+  are those exact items. So whatever the VIPM run left is not in the file or
+  registry deltas that were diffed; `install-vipc.ps1` needs to be re-run and
+  diffed *for deleted files* before the next commit. The working image,
+  `fscicd-labview:2026q3-windows-vipm` (22 GB), was assembled by hand:
+  elijah286 base + the trees above via `docker cp` + `seed-eval-licences.ps1`
+  + `Type=Eval`. It runs VI Analyzer on the project in 18 min. Note one gap
+  in that assembly: only *new top-level* directories were copied, so files a
+  package drops into a directory the base already had (`vi.lib\_probes\JDP
+  Science`, `resource\dialog\QuickDrop`, help/examples) were missed; the
+  probes and QuickDrop were added afterwards, the rest are not needed to
+  compile.
+- **Two NI layers the packages do not supply, and the container needs:**
+  `ni-syscfg-labview-support` (feed `ni-s/ni-system-configuration/25.5`, lands
+  in `LVAddons\nisyscfg` with `nisysapi.rc`) and the SystemLink Client LabVIEW
+  APIs (`vi.lib\Skyline`, feed `ni-s/ni-systemlink-labview-support/26.3`,
+  packages `ni-skyline-{common,file,message,tag}-labview-2026-support` and
+  `ni-systemlink-{alarm,notification,apm,apm-tag,test-monitor}-labview-2026-support`).
+  Both are in `2026q3-windows-vipm` now. Without them Mass Compile of one
+  project folder names 66 distinct unresolved items; with them, 8 — and the
+  45 `<vilib>\Skyline` ones took `SQLite.lvlib` (119 Bad subVIs),
+  `DBLogger.lvlib` and every `SystemLink Notifier` VI down with them. Note
+  `nipkg feed-add` rejects feed names containing a dot, and pass the package
+  list as a plain array, not `@splat`, or it sees an argument `-`.
+- **Mass Compile does not hang; it loads for 11–18 minutes before writing a
+  byte.** Re-measured with the packages baked: `_Code\SubVIs` (18 VIs) takes
+  11–18 min because it pulls in most of the project, LabVIEW at 100% of one
+  core and ~1 GB the whole time, `#### Starting Mass Compile` and everything
+  after it appear in the log only at the end. The 12-minute timeouts used
+  earlier therefore killed every run just before it reported, and — worse —
+  `Stop-Job` does not stop LabVIEW, so every later directory in the same
+  session queued behind the abandoned compile and "hung" too (`FSiCx`, 1 VI,
+  12 min). Use one fresh LabVIEW per directory, `-Headless`, a 30–50 minute
+  bound, and never chain directories in one session unless each finished. The
+  whole `_Code` tree (1492 VIs) did not finish in 110 min, so keep to one
+  module per run. Launch LabVIEW with `--headless` yourself and pass
+  `-LabVIEWPath` explicitly; on the poisoned image the CLI's own launch never
+  connected.
+- **With the environment complete, Mass Compile of the project names only
+  source-side problems, and they are all package or checkout drift:**
+  `Utilities.lvlib` in the released `sef_energy_lib_fs_utils` (1.15.x/1.16.x)
+  lists `Log Error to SysLog.vi` at `/<vilib>/SEF Energy/asedfFS Utils/...` —
+  a typo'd folder baked into the shipped lvlib (the developer's copy says
+  `../../Log Error to SysLog.vi`); 1.15.1.41 also shipped a second, stale
+  `FS Utils\Utilities.lvlib` at the folder root, so an upgrade leaves two
+  same-named libraries. `sef_energy_lib_fs_vx_actuator` 2.0.0.6 ships the five
+  `VXActuator\*.ctl` files but its `VXActuator.lvlib` does not list them; the
+  developer's lvlib has 14 members to the package's 9. Fixing the lvlib XML
+  alone does not help — the VIs carry their owning-library link too — so the
+  packages must be re-released from the developer's tree. `oglib_lvzip` is
+  not in the `.vipc` at all though `Pub Status.vi` calls it. In the checkout:
+  `SystemLink.lvclass:SystemLink.ctl` links `Logger Queue Type.ctl` by absolute
+  path to `C:\FS Hot Swap\_Code\...` (another clone); `SubVIs\OLD Log Error to
+  SysLog.vi` calls a deleted VI; and `_Code\DAQ Logger`, `SystemLink`,
+  `SystemMon` each carry a second (`FSiC *.lvlib`) or third (`SystemMonold`)
+  library claiming the same class files — git-tracked since the 2026-07-02
+  LV2026 commit and referenced by no `.lvproj`. A directory-wide load (VI
+  Analyzer, Mass Compile) picks them up; the IDE, loading only the
+  `.lvproj`'s libraries, never does.
+- **With every link resolved the project still scores 249–252, and the
+  breakage is exactly the actor class hierarchy.** Three what-if runs on
+  `2026q3-windows-vipm` (typo'd lvlib patched, host `FS Utils` and
+  `fs-vx-actuator` overlaid, lvzip supplied, the absolute `Logger Queue Type`
+  path satisfied, `OLD Log Error to SysLog.vi` deleted, then the duplicate
+  `FSiC *.lvlib`/`SystemMonold.lvlib` removed) drove Mass Compile's `Search
+  failed` count from 66 to 1 (`libc.so.6`, the WireFlow Linux stub) and
+  changed VI Analyzer by nothing: 252, 252, 249. Every VI in every
+  `Actor.lvclass` descendant (`FS iControl` 352/352, `Well` 208/208, `Valve`
+  140/140, `Equalizer` 43/43 …) fails while `Controls`, most of `SubVIs` and
+  `DEV` pass, so the mechanism is a broken class in the hierarchy, not
+  missing files. Duplicate class names across the actuator packages are not
+  it either — every `Abort Msg.lvclass` etc. is lvlib-qualified — and
+  `vi.lib\ActorFramework` is the host's byte for byte (lvlib identical, the
+  12 extra Proxy Actor files unlisted).
+- **VI Analyzer over `vi.lib\SEF Energy` in the complete environment names
+  the broken hierarchy members: 760 of 1013, with `fs-tx-actuator` 69/69,
+  `fs-systemlink` 35/35 and `fs-vx-actuator` 38/40 clean, and `fs-net-com`
+  63/70, `FS Valve Interface` 62/62, `fs-choke-actuator` 51/52,
+  `fs-daq-logger` 51/53 broken.** lvkit's saved-state flags show these are
+  broken *as saved on the developer's machine*, not just here: in the
+  developer's own `vi.lib`, `fs-daq-logger\DAQ Logger\Read local DAQ Queue
+  2.vi` and `Write local DAQ Queue.vi` (class accessors) carry `bad node`,
+  and `fs-choke-actuator`'s `Actor Core.vi` (both classes) and `Handle
+  Error.vi` carry `bad node`/`bad subVI`, all saved in LabVIEW 23.0. A broken
+  accessor breaks its class; a broken `Actor` child breaks every caller of
+  the parent's dynamic-dispatch methods, which in this project is everything.
+  So the container is right and the IDE has simply never opened those VIs.
+  Open them there and read Ctrl+L — that is the one measurement headless
+  tooling cannot make.
+- **2026-09-28 remeasure after IDE package edits (host `vi.lib` overlaid into
+  `2026q3-windows-vipm`): project still ~15%, SEF packages partly fixed.**
+  Fresh `robocopy` of FS iControl → `C:\temp\fsic`, then overlay of today's
+  host `vi.lib\SEF Energy\{fs-daq-logger,fs-choke-actuator,fs-vx-actuator,
+  fs-net-com,FS Valve Interface,FS Utils,fs-tx-actuator,fs-systemlink}`
+  (timestamps 13:28–13:36, verified byte-fresh vs host at run time). Results:
+
+  | target | score | prior vipm-bake baseline |
+  |---|---|---|
+  | project (`C:\temp\fsic`) | **189 / 1510** | 244 / 1647 |
+  | `vi.lib\SEF Energy` | **783 / 1074** | ~760–782 / ~1013–1056 |
+
+  Project absolute passes fell mainly because the checkout is thinner after
+  cleanup (duplicate `FSiC *.lvlib` / `SystemMonold` / orphans removed); every
+  Actor module is still 100% fail (`FS iControl` 334, `Well` 208, `Source` 170,
+  `Valve` 135, …). SEF package layer *did* move for the libraries that were
+  fixed on the host:
+
+  | package | fails (of VIs) | note |
+  |---|---|---|
+  | `fs-tx-actuator` | 0 / 69 | clean |
+  | `fs-vx-actuator` | 0 / 40 | clean (was 2) |
+  | `fs-systemlink` | 0 / 35 | clean |
+  | `FS Utils` | 21 / 245 | mostly clean |
+  | `FS Valve Interface` | 102 / 120 | 18 pass (was 0) |
+  | `fs-choke-actuator` | 51 / 52 | unchanged |
+  | `fs-daq-logger` | 51 / 53 | unchanged |
+  | `fs-net-com` | 63 / 70 | unchanged |
+
+  The project score will not move until `fs-choke-actuator`, `fs-daq-logger`,
+  and `fs-net-com` (and the valve callers on them) are fixed in the IDE and
+  those packages re-overlaid or re-baked. Working image for measurements:
+  `fscicd-labview:2026q3-windows-vipm`. Do **not** use `2026q3-windows` (VIPM
+  bake left LabVIEWCLI at `-350000`) or `2026q3-windows-replica` (registry
+  hives). Remeasure scripts/logs live under `C:\temp\diag\` (`via-remeasure.ps1`,
+  `via-sef-remeasure.ps1`) and reports under `C:\temp\out\report-remeasure.txt`,
+  `report-sef-remeasure.txt`. The project's `.viancfg` is **not** in the Dropbox
+  checkout — restore from `C:\temp\diag\FSiC VI Analyzer Tests.viancfg` into
+  `_Code\` after every fresh stage.
+- **lvkit's saved-state health flags settle the "is it broken on the
+  developer's machine too" question for the project itself: no.** `lvkit index` over the checkout
+  (134 min for 1493 VIs) reports 18 VIs saved broken, all orphans outside any
+  class or `.lvproj` (`DEV\*`, three `Pub * Meta Data` VIs, `Valve\Write
+  Config.vi`, `OLD Log Error to SysLog.vi`). 1097 VIs are still saved in
+  LabVIEW 23.0, 396 in 26.0. Its `lvproj` view resolves `../X` URLs one
+  level too high (LabVIEW treats the `.lvproj` file as a directory), so
+  ignore that view's `resolved_path`; `class_fact.parent` is right and shows
+  every project actor inheriting `Actor Framework.lvlib:Actor.lvclass`.
+- **The `VIPM File Handler.exe` probe is NOT load-bearing — do not gate installs
+  on it.** In a container where that helper answers nothing (exit 0, no return
+  file, `Recursive load during LEIF load!` in `LVStatus.txt`), the CLI's real
+  operations complete anyway once the recipe above is in place, so whatever IPC
+  the helper exercises is not the one the modern CLI depends on.
+  `install-vipc.ps1`'s preflight is now a warning, not a gate. Note `vipm
+  version` is still **not** a readiness check — it prints instantly with no
+  engine running — and JKI's Linux container bug
+  ([vipm-desktop-issues#126](https://github.com/vipm-io/vipm-desktop-issues/issues/126))
+  remains open but is no longer FSCICD's blocker.
+- **More LCWC findings worth stealing** (same docs): their VI Analyzer driver
+  runs a **Mass Compile pre-pass per top-level project folder** before
+  analysing, because VI Analyzer silently skips VIs saved in an older LabVIEW
+  ("0 VIs analyzed") — relevant here since this project's `.lvproj` still says
+  LabVIEW 2023. It compiles folders individually, which also sidesteps the
+  whole-project Mass Compile hang documented above. `RunVIAnalyzer` accepts
+  `-ReportSaveType HTML` for a native HTML report (extending the note above
+  that the default report is tab-separated text). A committed `.viancfg` whose
+  `ItemsToAnalyze` lists explicit VIs **runs zero tests headlessly** — LCWC
+  rewrites configs to Analyze-Project mode (`AnalyzeProject=TRUE` + the
+  `.lvproj`) to keep the selected tests. On GitHub-hosted runners they pin
+  `windows-2022` because **Windows Server 2025's Docker daemon is broken for
+  these LabVIEW containers**. And they treat **Windows bind-mount output as
+  unreliable**, using `docker cp` to extract reports from warm containers.
 - **JKI support containers on Linux only, and their documented setup has three
   steps we never took.** VIPM 2026 Q3 does ship a real standalone CLI (Rust, not
   a wrapper around the desktop app) with a

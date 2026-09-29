@@ -1,5 +1,12 @@
 # Draft bug report for JKI
 
+> **Superseded for FSCICD (2026-09-22).** VIPM installs in the 2026 Windows
+> container work once memory, `LV_RTE_HEADLESS`, `Settings.ini`, and
+> `vipm refresh` are correct (see `AGENTS.md` / `docker/README.md`). The File
+> Handler probe is **not** load-bearing — leave this draft unfiled unless
+> reproducing the LEIF crash specifically. Kept as historical evidence of the
+> false lead.
+
 To file at <https://github.com/vipm-io/vipm-desktop-issues/issues>. Probably
 related to #126 (same failure class, Linux side).
 

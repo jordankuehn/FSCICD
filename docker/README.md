@@ -7,22 +7,36 @@ mounting a developer machine's `vi.lib`, `user.lib` and `instr.lib` raised that
 only to 255 — copying files is not installing, which also does registry,
 `Settings.ini` and palette registration.
 
-This image installs the packages properly, with VIPM.
+This image is intended to install the packages properly, with VIPM.
 
-## Why it is two steps rather than a `docker build`
+## Status (2026-09-28)
 
-The VIPM CLI does not install anything itself: it delegates to an engine that is
-a LabVIEW-runtime GUI application. Measured in the NI Windows container:
+VIPM package installs in NI's 2026 Windows container **work** when the LCWC
+recipe is followed: container memory ≥2.5 GB (`docker run -m 8GB`),
+`LV_RTE_HEADLESS` cleared for the install process tree (image ENV can stay set
+for runtime LabVIEWCLI), JKI `Settings.ini` with year in `Versions 0` and
+quarter in `Active Target.Version`, and `vipm refresh --force` before any
+library operation. Details and the false leads eliminated along the way are in
+`AGENTS.md`.
 
-| | Engine after 60s |
-|---|---|
-| `docker run` | alive, `Responding = True` |
-| `docker build` | never completes startup; every call fails with `Operation 'wait for VIPM startup' timed out` |
+**Working measurement image today:** `fscicd-labview:2026q3-windows-vipm`
+(hand-assembled after a successful install). Do **not** use the committed tag
+`fscicd-labview:2026q3-windows` for analysis — every `LabVIEWCLI` call on that
+image fails with `-350000` even though port 3363 listens. Re-bake and only
+retag `2026q3-windows` after a connect + VIA probe passes. Also avoid
+`2026q3-windows-replica` (host NI/JKI registry hives baked in).
 
-Windows build steps run their children on a non-interactive window station,
-which the engine evidently cannot use. So the packages are installed by running
-a container and committing the result, which is a normal Docker technique for
-exactly this class of problem.
+Project VIA after overlaying today's fixed host `vi.lib\SEF Energy` packages:
+**189 / 1510**. SEF Energy itself: **783 / 1074**, with
+`fs-tx-actuator` / `fs-vx-actuator` / `fs-systemlink` clean and
+`fs-choke-actuator` / `fs-daq-logger` / `fs-net-com` still the wall. See
+`HANDOFF.md` and the 2026-09-28 remeasure bullet in `AGENTS.md`.
+
+## Why the install is a run-and-commit rather than a `docker build`
+
+The installer needs a live LabVIEW and a live VIPM engine, which is awkward
+inside a single `RUN`, so packages are installed by running a container and
+committing the result — a normal Docker technique for this class of problem.
 
 ## 1. Stage the tooling
 
@@ -67,6 +81,51 @@ When it finishes, commit the container to the image FSCICD will use:
 docker commit fscicd-vipm-install fscicd-labview:2026q3-windows
 docker rm fscicd-vipm-install
 ```
+
+`install-in-container.ps1` runs `seed-eval-licences.ps1` after the VIPM install.
+That copies each vendor's **as-shipped** `.lf` from `vi.lib` into
+`ProgramData\National Instruments\Partners\<Vendor>\Licenses\`, which puts
+TPLAT add-ons into their 30-day evaluation. Without this step, licensed
+libraries analyse as broken even when the files are present. Do **not** copy a
+developer machine's activated `Partners` tree instead — those files are bound
+to the host's TPLAT computer number and fail to open in a container.
+
+To run the seed step alone on an image that already has packages in `vi.lib`:
+
+```powershell
+docker run --rm fscicd-labview:2026q3-windows powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File C:\fscicd\seed-eval-licences.ps1
+```
+
+## Mass Compile diagnostics
+
+VI Analyzer only says "This VI is broken". To name the actual missing file or bad
+subVI, run Mass Compile on **one library inside vi.lib** — not the whole project,
+which hangs when dependencies are missing (see AGENTS.md).
+
+Mass Compile **rewrites VIs in place**. Aim it only at the container's own
+`vi.lib` copy or a throwaway project copy, never at a bind-mounted developer
+tree.
+
+One library:
+
+```powershell
+docker run --rm -v "C:\temp\out:C:\out" -e LV_RTE_HEADLESS=1 `
+  fscicd-labview:2026q3-windows powershell -NoLogo -NoProfile -ExecutionPolicy Bypass `
+  -File C:\fscicd\masscompile-dir.ps1 `
+  -Directory "C:\Program Files\National Instruments\LabVIEW 2026\vi.lib\SEF Energy\fs-net-com"
+```
+
+Several libraries in one LabVIEW session (`COMPILE_DIRS` or `-Directories`):
+
+```powershell
+docker run --rm -v "C:\temp\out:C:\out" -e LV_RTE_HEADLESS=1 `
+  -e COMPILE_DIRS="C:\Program Files\National Instruments\LabVIEW 2026\vi.lib\SEF Energy\fs-net-com;C:\Program Files\National Instruments\LabVIEW 2026\vi.lib\SEF Energy\fs-choke-actuator" `
+  fscicd-labview:2026q3-windows powershell -NoLogo -NoProfile -ExecutionPolicy Bypass `
+  -File C:\fscicd\masscompile-dir.ps1
+```
+
+Logs land under `C:\out\` (mount `C:\temp\out` on the host). The script seeds TPLAT
+evaluation licences first unless `SKIP_LICENCE_SEED=1`.
 
 ## 3. Point FSCICD at it
 

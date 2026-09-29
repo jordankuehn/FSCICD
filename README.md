@@ -9,6 +9,11 @@ CI runs **entirely on Bitbucket**: Bitbucket is the code of record *and* the CI
 host, via **Bitbucket Pipelines**. There is no GitHub mirror and no GitHub
 Actions workflow.
 
+**Agent / session handoff:** see [`HANDOFF.md`](HANDOFF.md) for the current
+measurement state, working image tags, and copy-paste remeasure recipe.
+Settled container findings live in [`AGENTS.md`](AGENTS.md); Windows worker
+build steps in [`docker/README.md`](docker/README.md).
+
 Because most LabVIEW work targets Windows — and Atlassian does not offer hosted
 Windows runners — the real LabVIEW jobs run on a **self-hosted Bitbucket Windows
 runner** driving the NI Windows container. Cloud (Linux) steps are used for the
@@ -114,22 +119,24 @@ mounting a developer machine's `vi.lib`, `user.lib` and `instr.lib` raised that
 only to 255 — copying files is not installing, which also does registry,
 `Settings.ini` and palette registration.
 
-[`docker/labview-worker.windows.Dockerfile`](docker/labview-worker.windows.Dockerfile)
-installs them properly, with VIPM, at build time:
+VIPM installs in the 2026 Windows container **work** (see `docker/README.md`).
+The working measurement image is currently `fscicd-labview:2026q3-windows-vipm`;
+do not point CI at the broken `2026q3-windows` tag until a re-bake passes a
+LabVIEWCLI connect probe. Build steps:
 
 ```powershell
 # 1. Stage the project's VIPM configuration (git-ignored)
 Copy-Item "path\to\Your Project.vipc" docker\vipm\
 
-# 2. Build, with Docker in Windows-container mode
-docker build -f docker/labview-worker.windows.Dockerfile -t fscicd-labview:2026q3-windows .
+# 2. Build staging, then run-and-commit (see docker/README.md)
+docker build -f docker/labview-worker.windows.Dockerfile -t fscicd-labview:staging .
 ```
 
-Then point `fscicd.yml` at the result:
+Then point `fscicd.yml` at the **verified** result:
 
 ```yaml
 labview:
-  image: fscicd-labview:2026q3-windows
+  image: fscicd-labview:2026q3-windows-vipm   # until 2026q3-windows is re-proven
   platform: windows
 ```
 
@@ -203,9 +210,9 @@ LabVIEW backend, enabled capabilities, and reporting.
 
 | Capability | `mock` runner | `container` runner |
 |---|---|---|
-| Mass Compile | Implemented | **Working** — verified against a real container log |
-| VI Analyzer | Implemented | **Working** — verified against a real container report |
-| Unit Tests | Implemented | **Blocked** — needs a custom worker image |
+| Mass Compile | Implemented | **Working** — verified; use vi.lib-scoped dirs (project-wide is slow, not hung) |
+| VI Analyzer | Implemented | **Working** — vipm image; project score gated by broken Actor packages (~189/1510) |
+| Unit Tests | Implemented | **Blocked** — needs UTF JUnit + Caraya/VI Tester in the worker image |
 
 **VI Analyzer** needs a `.viancfg`, which selects the tests to run and can only be
 authored in the LabVIEW IDE — `RunVIAnalyzer` refuses to start without one
@@ -217,7 +224,9 @@ sample project ships no configuration and its VIs are stubs.
 Note that a project whose dependencies are absent from the image will report
 almost every VI as broken, since LabVIEW cannot resolve their subVIs. Meaningful
 analysis of a real project therefore wants those dependencies installed too — the
-same requirement unit tests have.
+same requirement unit tests have. With packages baked, remaining breakage on the
+reference project is **source-side** (broken Actor class hierarchy in
+`fs-choke-actuator` / `fs-daq-logger` / `fs-net-com`); see [`HANDOFF.md`](HANDOFF.md).
 
 **Unit Tests** cannot run in the stock NI image: `RunUnitTests` fails with
 `-350053` because the UTF JUnit Report library is absent, and Caraya and VI Tester
@@ -225,7 +234,7 @@ are VIPM packages rather than CLI operations. Both halves have to be present —
 `ni-utf-labview-support` through `nipkg`, and the `ni_lib_utf_junit_report`
 packages through VIPM — which is what
 [the Windows worker image](#worker-image-for-a-project-with-vipm-dependencies)
-is for. That image is not yet proven end to end; see the note there.
+is for.
 
 Roadmap after those: VIDiff, VI Browser, Antidoc, and an aggregated multi-commit
 dashboard.
